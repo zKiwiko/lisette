@@ -137,10 +137,13 @@ pub fn write_go_mod(dir: &Path, module_name: &str) -> Result<(), String> {
 
 pub fn ensure_go_sum(dir: &Path) -> Result<(), String> {
     let go_sum_path = dir.join("go.sum");
-    if go_sum_path.exists() {
-        return Ok(());
+    if let Ok(content) = fs::read_to_string(&go_sum_path) {
+        // go.mod hash + source hash lines
+        if content.lines().count() >= 2 {
+            return Ok(());
+        }
     }
-    go_mod_download(dir)
+    go_mod_tidy(dir)
 }
 
 pub fn prewarm_module_cache() {
@@ -156,16 +159,16 @@ pub fn prewarm_module_cache() {
         .spawn();
 }
 
-fn go_mod_download(path: &Path) -> Result<(), String> {
+fn go_mod_tidy(path: &Path) -> Result<(), String> {
     let output = Command::new("go")
-        .args(["mod", "download"])
+        .args(["mod", "tidy"])
         .current_dir(path)
         .output()
-        .map_err(|e| format!("Failed to run `go mod download`: {}", e))?;
+        .map_err(|e| format!("Failed to run `go mod tidy`: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("`go mod download` error: {}", stderr));
+        return Err(format!("`go mod tidy` error: {}", stderr));
     }
 
     Ok(())

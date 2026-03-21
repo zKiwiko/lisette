@@ -21,9 +21,10 @@ pre-commit:
       glob: "tools/bindgen/**/*.go"
       run: just regenerate-stdlib-typedefs && git diff --exit-code crates/stdlib/
     go-version-sync:
-      glob: "{go-version,prelude/go.mod}"
+      glob: "{go-version,prelude/go.mod,tools/bindgen/go.mod}"
       run: |
-        COMPILER_GO_VERSION=$(cat go-version)
-        COMPILER_GO_MAJOR_MINOR=$(echo "$COMPILER_GO_VERSION" | cut -d. -f1,2)
-        PRELUDE_GO_VERSION=$(grep '^go ' prelude/go.mod | awk '{print $2}')
-        [ "$COMPILER_GO_MAJOR_MINOR" = "$PRELUDE_GO_VERSION" ] || { echo "Go version mismatch: go-version has $COMPILER_GO_VERSION but prelude/go.mod has go $PRELUDE_GO_VERSION. Update prelude/go.mod to 'go $COMPILER_GO_MAJOR_MINOR'."; exit 1; }
+        EXPECTED=$(cat go-version | cut -d. -f1,2)
+        PRELUDE=$(grep '^go ' prelude/go.mod | awk '{print $2}')
+        BINDGEN=$(grep '^go ' tools/bindgen/go.mod | awk '{print $2}' | cut -d. -f1,2)
+        [ "$EXPECTED" = "$PRELUDE" ] || { echo "Go version mismatch: go-version has $EXPECTED but prelude/go.mod has $PRELUDE"; exit 1; }
+        [ "$EXPECTED" = "$BINDGEN" ] || { echo "Go version mismatch: go-version has $EXPECTED but tools/bindgen/go.mod has $BINDGEN"; exit 1; }

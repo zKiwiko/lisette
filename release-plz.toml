@@ -1,2 +1,9 @@
 [workspace]
 changelog_update = false
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "lisette"
+git_tag_enable = true
+git_release_enable = true

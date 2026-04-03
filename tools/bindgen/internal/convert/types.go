@@ -38,8 +38,11 @@ func isNilableGoType(t types.Type) bool {
 	case *types.Pointer:
 		return true
 	case *types.Named:
-		if iface, ok := t.Underlying().(*types.Interface); ok {
-			return !iface.Empty() && !isErrorInterface(iface)
+		switch u := t.Underlying().(type) {
+		case *types.Pointer:
+			return true
+		case *types.Interface:
+			return !u.Empty() && !isErrorInterface(u)
 		}
 	}
 	return false

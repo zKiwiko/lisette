@@ -16,8 +16,8 @@ var Stdout *File
 // EOF marks end of file.
 var EOF error
 
-// Discard is a writer that discards all data.
-var Discard io.Writer
+// Sink is an uninitialized writer.
+var Sink io.Writer
 
 // File represents an open file.
 type File struct {

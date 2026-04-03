@@ -224,6 +224,13 @@ func (c *Converter) isProvenNonNilExprSimple(expr ast.Expr) bool {
 	if _, ok := expr.(*ast.CompositeLit); ok {
 		return true
 	}
+	if sel, ok := expr.(*ast.SelectorExpr); ok && c.pkg != nil && c.pkg.TypesInfo != nil {
+		if obj, ok := c.pkg.TypesInfo.Uses[sel.Sel]; ok {
+			if _, isConst := obj.(*types.Const); isConst {
+				return true
+			}
+		}
+	}
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
 		return false

@@ -380,12 +380,12 @@ func (c *Converter) convertVariable(result *ConvertResult, exp extract.SymbolExp
 	}
 	result.LisetteType = t.LisetteType
 
-	_, isPointer := exp.GoType.Underlying().(*types.Pointer)
+	isNilable := isNilableGoType(exp.GoType)
 	forceNonNilable := c.cfg != nil && (c.cfg.IsNonNilableVar(c.currentPkgPath, result.Name) || c.cfg.IsNonNilableReturn(c.currentPkgPath, result.Name))
-	if !forceNonNilable && isPointer {
+	if !forceNonNilable && isNilable {
 		forceNonNilable = c.isProvenNonNilVar(exp.Obj)
 	}
-	if isPointer && !forceNonNilable {
+	if isNilable && !forceNonNilable {
 		result.LisetteType = fmt.Sprintf("Option<%s>", result.LisetteType)
 	}
 }

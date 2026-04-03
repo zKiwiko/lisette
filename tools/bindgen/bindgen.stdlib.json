@@ -347,6 +347,9 @@
         "time": ["AfterFunc", "FixedZone", "Time.Location"]
       },
       "non_nilable_var": {
+        "crypto/rand": ["Reader"],
+        "image/color": ["*"],
+        "io/ioutil": ["Discard"],
         "unicode": ["*"]
       }
     }

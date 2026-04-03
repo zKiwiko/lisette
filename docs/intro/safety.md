@@ -43,20 +43,27 @@ match flag.Lookup("verbose") {
 
 ### Safe interface values
 
-A Go interface holds a type-value pair. If a typed `nil` pointer is wrapped in an interface, the interface is not `nil` but calling methods on it still panics:
+A Go interface can be `nil`, and calling methods on it panics:
 
 ```go
-var err *MyError = nil
-var e error = err
-e != nil   // `true`, interface is typed `*MyError`
-e.Error()  // panic: `nil` pointer dereference
+var h http.Handler
+h.ServeHTTP(w, r) // panic: nil pointer dereference
 ```
 
-Lisette wraps Go interfaces in `Option`, so the absence case must be handled:
+There is also a subtler case: typed `nil`. A `nil` pointer assigned to an interface makes the interface non-`nil`, so the type is known, but the value is `nil`. Go's `!= nil` check passes, but calling methods still panics:
 
-```rust
-// Go:  `func FindHandler(name string) http.Handler`
-// Lis: `fn FindHandler(name: string) -> Option<http.Handler>`
+```go
+var p *MyHandler = nil
+var h http.Handler = p
+h != nil      // true, the interface has a type
+h.ServeHTTP() // panic: the value inside is nil
+```
+
+To protect against this, Lisette wraps a Go interface in `Option` when it crosses the interop boundary in a position where it could be `nil`. Both a `nil` interface and a typed `nil` interface become `None`:
+
+```rs
+// Go:  func FindHandler(name string) http.Handler
+// Lis: fn FindHandler(name: string) -> Option<http.Handler>
 
 match FindHandler("api") {
   Some(h) => router.Handle("/api", h),

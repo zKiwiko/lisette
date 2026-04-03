@@ -1,0 +1,28 @@
+---
+source: tests/spec/emit/interop_matrix.rs
+description: "input: \nimport \"go:context\"\nimport \"go:fmt\"\n\nfn main() {\n  let ctx = context.Background()\n  match ctx.Err() {\n    Some(e) => fmt.Println(e.Error()),\n    None => fmt.Println(\"no error\"),\n  }\n}\n"
+---
+package main
+
+import (
+	"context"
+	"fmt"
+	lisette "github.com/ivov/lisette/prelude"
+)
+
+func main() {
+	ctx := context.Background()
+	raw_2 := ctx.Err()
+	var subject_1 lisette.Option[error]
+	if !lisette.IsNilInterface(raw_2) {
+		subject_1 = lisette.MakeOptionSome[error](raw_2)
+	} else {
+		subject_1 = lisette.MakeOptionNone[error]()
+	}
+	if subject_1.Tag == lisette.OptionSome {
+		e := subject_1.SomeVal
+		fmt.Println(e.Error())
+	} else {
+		fmt.Println("no error")
+	}
+}

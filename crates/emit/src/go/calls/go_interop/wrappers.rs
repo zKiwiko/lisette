@@ -180,7 +180,16 @@ impl Emitter<'_> {
             ok_val.to_string()
         };
 
-        write_line!(output, "}} else if {} == nil {{", nil_check);
+        let is_interface = self.as_interface(ok_ty).is_some();
+        if is_interface {
+            write_line!(
+                output,
+                "}} else if lisette.IsNilInterface({}) {{",
+                nil_check
+            );
+        } else {
+            write_line!(output, "}} else if {} == nil {{", nil_check);
+        }
 
         self.flags.needs_errors = true;
         let mut fe = FallibleEmitter::new(self, fallible);

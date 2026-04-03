@@ -14,7 +14,7 @@ func main() {
 	ctx := context.Background()
 	raw_1 := ctx.Err()
 	var err lisette.Option[error]
-	if raw_1 != nil {
+	if !lisette.IsNilInterface(raw_1) {
 		err = lisette.MakeOptionSome[error](raw_1)
 	} else {
 		err = lisette.MakeOptionNone[error]()

@@ -1,0 +1,32 @@
+---
+source: tests/spec/emit/interop_matrix.rs
+description: "input: \nimport \"go:fmt\"\nimport \"go:os\"\n\nfn main() {\n  let info = os.Stat(\"/tmp\")\n  match info {\n    Ok(i) => fmt.Println(i.Size()),\n    Err(e) => fmt.Println(e),\n  }\n}\n"
+---
+package main
+
+import (
+	"errors"
+	"fmt"
+	lisette "github.com/ivov/lisette/prelude"
+	"io/fs"
+	"os"
+)
+
+func main() {
+	ret_1, ret_2 := os.Stat("/tmp")
+	var info lisette.Result[fs.FileInfo, error]
+	if ret_2 != nil {
+		info = lisette.MakeResultErr[fs.FileInfo, error](ret_2)
+	} else if lisette.IsNilInterface(ret_1) {
+		info = lisette.MakeResultErr[fs.FileInfo, error](errors.New("unexpected nil"))
+	} else {
+		info = lisette.MakeResultOk[fs.FileInfo, error](ret_1)
+	}
+	if info.Tag == lisette.ResultOk {
+		i := info.OkVal
+		fmt.Println(i.Size())
+	} else {
+		e := info.ErrVal
+		fmt.Println(e)
+	}
+}

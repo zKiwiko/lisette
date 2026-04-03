@@ -189,6 +189,16 @@ impl Emitter<'_> {
         inner.is_ref() || self.as_interface(&inner).is_some()
     }
 
+    /// Returns true if the Option wraps a Go interface type (not a pointer).
+    /// These need `IsNilInterface` instead of `!= nil` to catch typed nils.
+    pub(crate) fn is_interface_option(&self, ty: &Type) -> bool {
+        if !ty.is_option() {
+            return false;
+        }
+        let inner = ty.ok_type();
+        self.as_interface(&inner).is_some()
+    }
+
     pub(crate) fn is_go_nullable(&self, ty: &Type) -> bool {
         self.is_nullable_option(ty) || self.nullable_collection_element_ty(ty).is_some()
     }

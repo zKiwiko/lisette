@@ -17,7 +17,7 @@ func main() {
 	var result lisette.Result[fs.FileInfo, error]
 	if ret_2 != nil {
 		result = lisette.MakeResultErr[fs.FileInfo, error](ret_2)
-	} else if ret_1 == nil {
+	} else if lisette.IsNilInterface(ret_1) {
 		result = lisette.MakeResultErr[fs.FileInfo, error](errors.New("unexpected nil"))
 	} else {
 		result = lisette.MakeResultOk[fs.FileInfo, error](ret_1)

@@ -893,3 +893,64 @@ fn main() {
 "#;
     assert_emit_snapshot!(input);
 }
+
+#[test]
+fn interop_typed_nil_interface_single_return() {
+    let input = r#"
+import "go:context"
+import "go:fmt"
+
+fn main() {
+  let ctx = context.Background()
+  match ctx.Err() {
+    Some(e) => fmt.Println(e.Error()),
+    None => fmt.Println("no error"),
+  }
+}
+"#;
+    assert_emit_snapshot!(input);
+}
+
+#[test]
+fn interop_typed_nil_interface_result_return() {
+    let input = r#"
+import "go:fmt"
+import "go:os"
+
+fn main() {
+  let info = os.Stat("/tmp")
+  match info {
+    Ok(i) => fmt.Println(i.Size()),
+    Err(e) => fmt.Println(e),
+  }
+}
+"#;
+    assert_emit_snapshot!(input);
+}
+
+#[test]
+fn interop_typed_nil_interface_collection() {
+    let input = r#"
+import "go:fmt"
+import "go:go/ast"
+import "go:go/token"
+
+fn main() {
+  let lit = ast.CompositeLit {
+    Type: None,
+    Lbrace: 0 as token.Pos,
+    Elts: [],
+    Rbrace: 0 as token.Pos,
+    Incomplete: false,
+  }
+  let elts = lit.Elts
+  for elt in elts {
+    match elt {
+      Some(e) => fmt.Println(e.Pos()),
+      None => fmt.Println("nil"),
+    }
+  }
+}
+"#;
+    assert_emit_snapshot!(input);
+}

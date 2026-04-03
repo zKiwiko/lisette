@@ -65,7 +65,9 @@ impl Emitter<'_> {
         let option_var = fe.emitter.fresh_var(Some("option"));
         fe.emitter.declare(&option_var);
 
-        let condition = if self.is_nullable_option(option_ty) {
+        let condition = if self.is_interface_option(option_ty) {
+            format!("{} && !lisette.IsNilInterface({})", ok_var, val_vars[0])
+        } else if self.is_nullable_option(option_ty) {
             format!("{} && {} != nil", ok_var, val_vars[0])
         } else {
             ok_var.clone()
@@ -103,8 +105,13 @@ impl Emitter<'_> {
         let option_var = fe.emitter.fresh_var(Some("option"));
         fe.emitter.declare(&option_var);
 
+        let is_interface = self.is_interface_option(option_ty);
         write_line!(output, "var {} {}", option_var, option_ty_str);
-        write_line!(output, "if {} != nil {{", raw_value);
+        if is_interface {
+            write_line!(output, "if !lisette.IsNilInterface({}) {{", raw_value);
+        } else {
+            write_line!(output, "if {} != nil {{", raw_value);
+        }
 
         let mut fe = FallibleEmitter::new(self, &fallible);
         let some_wrapper = fe.emit_success(raw_value);
@@ -224,7 +231,12 @@ impl Emitter<'_> {
 
         let fallible = Fallible::from_type(elem_option_ty).expect("Option type expected");
 
-        write_line!(output, "if {} != nil {{", val_var);
+        let is_interface = self.is_interface_option(elem_option_ty);
+        if is_interface {
+            write_line!(output, "if !lisette.IsNilInterface({}) {{", val_var);
+        } else {
+            write_line!(output, "if {} != nil {{", val_var);
+        }
         let mut fe = FallibleEmitter::new(self, &fallible);
         let some_wrapper = fe.emit_success(&val_var);
         write_line!(output, "{}[{}] = {}", wrapped_var, idx_var, some_wrapper);

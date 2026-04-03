@@ -1,0 +1,53 @@
+---
+source: tests/spec/emit/interop_matrix.rs
+description: "input: \nimport \"go:fmt\"\nimport \"go:go/ast\"\nimport \"go:go/token\"\n\nfn main() {\n  let lit = ast.CompositeLit {\n    Type: None,\n    Lbrace: 0 as token.Pos,\n    Elts: [],\n    Rbrace: 0 as token.Pos,\n    Incomplete: false,\n  }\n  let elts = lit.Elts\n  for elt in elts {\n    match elt {\n      Some(e) => fmt.Println(e.Pos()),\n      None => fmt.Println(\"nil\"),\n    }\n  }\n}\n"
+---
+package main
+
+import (
+	"fmt"
+	lisette "github.com/ivov/lisette/prelude"
+	"go/ast"
+	"go/token"
+)
+
+func main() {
+	opt_1 := lisette.MakeOptionNone[ast.Expr]()
+	var unwrap_2 ast.Expr
+	if opt_1.Tag == lisette.OptionSome {
+		unwrap_2 = opt_1.SomeVal
+	}
+	src_3 := []lisette.Option[ast.Expr]{}
+	unwrapped_4 := make([]ast.Expr, len(src_3))
+	for i_5, v_6 := range src_3 {
+		if v_6.Tag == lisette.OptionSome {
+			unwrapped_4[i_5] = v_6.SomeVal
+		}
+	}
+	lit := ast.CompositeLit{
+		Type:       unwrap_2,
+		Lbrace:     token.Pos(0),
+		Elts:       unwrapped_4,
+		Rbrace:     token.Pos(0),
+		Incomplete: false,
+	}
+	raw_7 := lit.Elts
+	src_8 := raw_7
+	wrapped_9 := make([]lisette.Option[ast.Expr], len(src_8))
+	for i_10, v_11 := range src_8 {
+		if !lisette.IsNilInterface(v_11) {
+			wrapped_9[i_10] = lisette.MakeOptionSome[ast.Expr](v_11)
+		} else {
+			wrapped_9[i_10] = lisette.MakeOptionNone[ast.Expr]()
+		}
+	}
+	elts := wrapped_9
+	for _, elt := range elts {
+		if elt.Tag == lisette.OptionSome {
+			e := elt.SomeVal
+			fmt.Println(e.Pos())
+		} else {
+			fmt.Println("nil")
+		}
+	}
+}

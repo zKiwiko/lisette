@@ -30,9 +30,11 @@ impl<'source> Parser<'source> {
 
         let start = self.current_token();
         let mut lhs = self.parse_left_hand_side();
+        let depth_before_loop = self.depth;
 
         while !self.at_eof() && !self.too_many_errors() {
             if self.check_go_channel_send() {
+                self.depth = depth_before_loop;
                 self.leave_recursion();
                 return lhs;
             }
@@ -77,6 +79,9 @@ impl<'source> Parser<'source> {
             }
 
             if self.is_postfix_operator(&lhs) {
+                if !self.enter_recursion() {
+                    break;
+                }
                 if self.is_format_string(&lhs)
                     && (self.current_token().kind == LeftParen
                         || self.current_token().kind == LeftSquareBracket)
@@ -109,6 +114,7 @@ impl<'source> Parser<'source> {
             break;
         }
 
+        self.depth = depth_before_loop;
         self.leave_recursion();
 
         lhs

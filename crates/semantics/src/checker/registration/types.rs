@@ -98,7 +98,8 @@ impl Checker<'_, '_> {
             if let Some(simple_qualified_name) = simple_name {
                 module
                     .definitions
-                    .insert(simple_qualified_name.into(), definition);
+                    .entry(simple_qualified_name.into())
+                    .or_insert(definition);
             }
         }
 
@@ -358,7 +359,8 @@ impl Checker<'_, '_> {
 
         scope
             .values
-            .insert(variant.name.to_string(), enum_variant_constructor_ty);
+            .entry(variant.name.to_string())
+            .or_insert(enum_variant_constructor_ty);
     }
 
     #[allow(clippy::too_many_arguments)]

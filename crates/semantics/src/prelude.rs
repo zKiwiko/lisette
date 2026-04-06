@@ -1,6 +1,6 @@
 use diagnostics::DiagnosticSink;
 use stdlib::LIS_PRELUDE_SOURCE;
-use syntax::program::{Definition, File, Visibility};
+use syntax::program::{File, Visibility};
 
 use crate::call_classification::compute_module_ufcs;
 use crate::checker::Checker;
@@ -49,42 +49,6 @@ pub fn parse_and_register_prelude(store: &mut Store, sink: &DiagnosticSink) {
     }
 
     checker.cursor.file_id = None;
-
-    let module = checker
-        .store
-        .get_module_mut(PRELUDE_MODULE_ID)
-        .expect("prelude module must exist");
-
-    let short_forms: Vec<_> = module
-        .definitions
-        .iter()
-        .filter_map(|(name, definition)| {
-            let Definition::Enum { variants, .. } = definition else {
-                return None;
-            };
-            let enum_name = name.rsplit('.').next().unwrap();
-            Some(
-                variants
-                    .iter()
-                    .map(|v| {
-                        let short = format!("prelude.{}", v.name);
-                        let full = format!("prelude.{}.{}", enum_name, v.name);
-                        (short, full)
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .flatten()
-        .collect();
-
-    for (short, full) in short_forms {
-        let definition = module
-            .definitions
-            .get(full.as_str())
-            .cloned()
-            .expect("enum variant definition must exist for qualified name");
-        module.definitions.entry(short.into()).or_insert(definition);
-    }
 }
 
 pub fn compute_prelude_ufcs(store: &Store) -> Vec<(String, String)> {

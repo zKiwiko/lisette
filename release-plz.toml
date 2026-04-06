@@ -2,6 +2,7 @@
 changelog_update = false
 git_tag_enable = false
 git_release_enable = false
+semver_check = false
 
 [[package]]
 name = "lisette"
@@ -21,4 +22,6 @@ changelog_include = [
 
 [changelog]
 header = """# Changelog
+
+Lisette is under active development. Any version before 1.0.0 may include breaking changes.
 """

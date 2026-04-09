@@ -31,10 +31,6 @@ pub enum Command {
     Add {
         dependency: String,
     },
-    Remove {
-        dependency: String,
-    },
-    List,
     Lsp,
     Bindgen {
         package: String,
@@ -190,16 +186,6 @@ impl Command {
                 }),
             },
 
-            "remove" => match arguments.next() {
-                Some(dependency) => Ok(Command::Remove { dependency }),
-                None => Err(ParseError::MissingArgument {
-                    command: "remove",
-                    argument: "dependency",
-                }),
-            },
-
-            "list" => Ok(Command::List),
-
             "lsp" => Ok(Command::Lsp),
 
             "learn" => Ok(Command::Learn),
@@ -250,9 +236,12 @@ impl Command {
                 let mut version = None;
                 let mut verbose = false;
 
-                for arg in arguments {
+                while let Some(arg) = arguments.next() {
                     match arg.as_str() {
                         "-v" | "--verbose" => verbose = true,
+                        "-o" | "--output" => {
+                            output = arguments.next();
+                        }
                         s if s.starts_with("-o=") || s.starts_with("--output=") => {
                             output = Some(s.split('=').nth(1).unwrap_or("").to_string());
                         }
@@ -294,8 +283,6 @@ impl Command {
             "help",
             "version",
             "add",
-            "remove",
-            "list",
             "learn",
             "doc",
             "completions",

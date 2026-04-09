@@ -136,21 +136,6 @@ Arguments:
     <dependency>    Dependency to add (e.g., `github.com/user/repo`)",
         ),
 
-        "remove" | "rm" => print_help(
-            "`lis remove` <dependency>
-
-Remove a dependency from the project.
-
-Arguments:
-    <dependency>    Dependency to remove (e.g., `github.com/user/repo`)",
-        ),
-
-        "list" => print_help(
-            "`lis list`
-
-List all dependencies in the project.",
-        ),
-
         "lsp" => print_help(
             "`lis lsp`
 
@@ -166,7 +151,7 @@ Arguments:
     <package>    Go package path to generate bindings for (e.g., `fmt`, `net/http`)
 
 Options:
-    `-o`, `--output`=<path>    Output file path (default: <package>`.d.lis`)
+    `-o`, `--output` <path>    Output file path (default: <package>`.d.lis`)
     `-f`, `--force`            Regenerate even if output exists
     `-v`, `--verbose`          Show verbose output
 

@@ -31,7 +31,7 @@ fuzz_target!(|data: &[u8]| {
 
     checker.register_types_and_values(
         &desugar_result.ast,
-        &lisette_syntax::ast::Visibility::Private,
+        &lisette_syntax::program::Visibility::Private,
     );
 
     for expression in desugar_result.ast {

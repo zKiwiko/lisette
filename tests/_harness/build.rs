@@ -31,7 +31,7 @@ pub fn compile_check(fs: MockFileSystem) -> SemanticResult {
         filename: "main.lis".to_string(),
         ast: build_result.ast,
         project_root: None,
-        go_resolver: deps::GoDepResolver::default(),
+        locator: deps::TypedefLocator::default(),
         compile_phase: semantics::analyze::CompilePhase::Check,
     })
     .0
@@ -60,7 +60,7 @@ pub fn compile_check_standalone(fs: MockFileSystem) -> SemanticResult {
         filename: "main.lis".to_string(),
         ast: build_result.ast,
         project_root: None,
-        go_resolver: deps::GoDepResolver::default(),
+        locator: deps::TypedefLocator::default(),
         compile_phase: semantics::analyze::CompilePhase::Check,
     })
     .0
@@ -91,7 +91,7 @@ pub fn compile_project(fs: MockFileSystem, go_module: &str) -> String {
         filename: "main.lis".to_string(),
         ast: build_result.ast,
         project_root: None,
-        go_resolver: deps::GoDepResolver::default(),
+        locator: deps::TypedefLocator::default(),
         compile_phase: semantics::analyze::CompilePhase::Emit,
     });
 

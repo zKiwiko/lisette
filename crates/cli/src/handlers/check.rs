@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 use diagnostics::render::{self, Filter};
 use lisette::fs::LocalFileSystem;
 use lisette::pipeline::{CompileConfig, CompilePhase, CompileResult, compile};
@@ -29,7 +29,7 @@ pub fn check(path: Option<String>, errors_only: bool, warnings_only: bool) -> i3
     };
 
     if !target_path.is_dir() {
-        return check_single_file(target_path, &filter, false, GoDepResolver::default());
+        return check_single_file(target_path, &filter, false, TypedefLocator::default());
     }
 
     if target_path.join("lisette.toml").exists() {
@@ -61,7 +61,7 @@ fn check_project(project_path: &Path, filter: &Filter) -> i32 {
         return 1;
     }
 
-    let go_resolver = match GoDepResolver::from_project(project_path) {
+    let locator = match TypedefLocator::from_project(project_path) {
         Ok(r) => r,
         Err(msg) => {
             cli_error!("Failed to check project", msg, "Fix `lisette.toml`");
@@ -69,18 +69,17 @@ fn check_project(project_path: &Path, filter: &Filter) -> i32 {
         }
     };
 
-    check_single_file(&src_main, filter, true, go_resolver)
+    check_single_file(&src_main, filter, true, locator)
 }
 
 fn check_single_file(
     file_path: &Path,
     filter: &Filter,
     load_siblings: bool,
-    go_resolver: GoDepResolver,
+    locator: TypedefLocator,
 ) -> i32 {
     let start = Instant::now();
-    let Some((result, source, filename)) =
-        compile_single_file(file_path, load_siblings, go_resolver)
+    let Some((result, source, filename)) = compile_single_file(file_path, load_siblings, locator)
     else {
         return 1; // Read error already reported by compile_single_file
     };
@@ -110,7 +109,7 @@ fn check_single_file(
 fn compile_single_file(
     file_path: &Path,
     load_siblings: bool,
-    go_resolver: GoDepResolver,
+    locator: TypedefLocator,
 ) -> Option<(CompileResult, String, String)> {
     let source = match fs::read_to_string(file_path) {
         Ok(s) => s,
@@ -135,8 +134,8 @@ fn compile_single_file(
         standalone_mode: !load_siblings,
         load_siblings,
         debug: false,
-        project_root: go_resolver.project_root().map(|p| p.to_path_buf()),
-        go_resolver,
+        project_root: locator.project_root().map(|p| p.to_path_buf()),
+        locator,
     };
 
     let working_dir = file_path.parent().and_then(|p| p.to_str()).unwrap_or(".");
@@ -181,7 +180,7 @@ fn check_loose_dir(dir: &Path, filter: &Filter) -> i32 {
         let mut compiled = None;
         let mut dir_read_failures = 0;
         for file in dir_files {
-            if let Some(result) = compile_single_file(file, true, GoDepResolver::default()) {
+            if let Some(result) = compile_single_file(file, true, TypedefLocator::default()) {
                 compiled = Some(result);
                 break;
             }

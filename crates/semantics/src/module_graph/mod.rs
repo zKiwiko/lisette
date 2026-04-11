@@ -2,7 +2,7 @@ pub mod kahn;
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-use deps::{GoDepResolver, GoTypedefResult};
+use deps::{TypedefLocator, TypedefLocatorResult};
 use syntax::ast::Span;
 use syntax::program::File;
 
@@ -28,7 +28,7 @@ pub fn build_module_graph(
     entry_module: &str,
     sink: &DiagnosticSink,
     standalone_mode: bool,
-    go_resolver: &GoDepResolver,
+    locator: &TypedefLocator,
 ) -> ModuleGraphResult {
     let mut edges: HashMap<ModuleId, HashSet<ModuleId>> = HashMap::default();
     let mut to_visit = vec![entry_module.to_string()];
@@ -42,14 +42,8 @@ pub fn build_module_graph(
         }
         visited.insert(module_id.clone());
 
-        let (imports_with_spans, module_files) = collect_imports(
-            &module_id,
-            store,
-            loader,
-            sink,
-            standalone_mode,
-            go_resolver,
-        );
+        let (imports_with_spans, module_files) =
+            collect_imports(&module_id, store, loader, sink, standalone_mode, locator);
 
         let module_exists = !module_files.is_empty()
             || store.has(&module_id)
@@ -140,7 +134,7 @@ fn collect_imports(
     loader: Option<&dyn Loader>,
     sink: &DiagnosticSink,
     standalone_mode: bool,
-    go_resolver: &GoDepResolver,
+    locator: &TypedefLocator,
 ) -> (HashMap<ModuleId, Span>, Vec<File>) {
     let mut imports = HashMap::default();
 
@@ -167,11 +161,11 @@ fn collect_imports(
         }
 
         if let Some(go_pkg) = file_import.name.strip_prefix("go:") {
-            match go_resolver.find_typedef_content(go_pkg) {
-                GoTypedefResult::Found { .. } => {
+            match locator.find_typedef_content(go_pkg) {
+                TypedefLocatorResult::Found { .. } => {
                     imports.insert(file_import.name.to_string(), file_import.name_span);
                 }
-                GoTypedefResult::UnknownStdlib => {
+                TypedefLocatorResult::UnknownStdlib => {
                     sink.push(diagnostics::module_graph::module_not_found(
                         &file_import.name,
                         file_import.name_span,
@@ -180,7 +174,7 @@ fn collect_imports(
                         None,
                     ));
                 }
-                GoTypedefResult::UndeclaredImport => {
+                TypedefLocatorResult::UndeclaredImport => {
                     if standalone_mode {
                         sink.push(diagnostics::module_graph::module_not_found(
                             &file_import.name,
@@ -196,7 +190,7 @@ fn collect_imports(
                         ));
                     }
                 }
-                GoTypedefResult::MissingTypedef { module, version } => {
+                TypedefLocatorResult::MissingTypedef { module, version } => {
                     sink.push(diagnostics::module_graph::missing_go_typedef(
                         go_pkg,
                         &module,
@@ -204,7 +198,7 @@ fn collect_imports(
                         file_import.name_span,
                     ));
                 }
-                GoTypedefResult::UnreadableTypedef { path, error } => {
+                TypedefLocatorResult::UnreadableTypedef { path, error } => {
                     sink.push(diagnostics::module_graph::unreadable_go_typedef(
                         &path,
                         &error,

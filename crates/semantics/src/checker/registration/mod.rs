@@ -5,7 +5,7 @@ mod types;
 
 use rustc_hash::FxHashMap as HashMap;
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 use syntax::ast::{
     Annotation, Attribute, AttributeArg, EnumVariant, Expression, FunctionDefinition, Generic,
     Span, StructKind, Visibility as SyntacticVisibility,
@@ -152,7 +152,7 @@ impl Checker<'_, '_> {
         &mut self,
         module_id: &str,
         source: &str,
-        go_resolver: &GoDepResolver,
+        locator: &TypedefLocator,
     ) {
         if self.store.is_visited(module_id) {
             return;
@@ -184,11 +184,11 @@ impl Checker<'_, '_> {
         for import in &imports {
             if let Some(go_pkg) = import.name.strip_prefix("go:") {
                 let import_module_id = format!("go:{}", go_pkg);
-                if let deps::GoTypedefResult::Found {
+                if let deps::TypedefLocatorResult::Found {
                     content: source, ..
-                } = go_resolver.find_typedef_content(go_pkg)
+                } = locator.find_typedef_content(go_pkg)
                 {
-                    self.parse_and_register_go_module(&import_module_id, &source, go_resolver);
+                    self.parse_and_register_go_module(&import_module_id, &source, locator);
                 }
             }
         }

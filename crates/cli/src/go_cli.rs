@@ -4,7 +4,7 @@ use std::process::Command;
 
 include!(concat!(env!("OUT_DIR"), "/go_version.rs"));
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 use emit::PRELUDE_IMPORT_PATH;
 
 pub fn require_go() -> Result<(), i32> {
@@ -98,16 +98,12 @@ pub fn go_fmt(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn write_go_mod(
-    dir: &Path,
-    module_name: &str,
-    go_resolver: &GoDepResolver,
-) -> Result<(), String> {
+pub fn write_go_mod(dir: &Path, module_name: &str, locator: &TypedefLocator) -> Result<(), String> {
     let prelude_version = env!("CARGO_PKG_VERSION");
 
     let mut requires = vec![format!("\t{} v{}", PRELUDE_IMPORT_PATH, prelude_version)];
 
-    for (module_path, dep) in go_resolver.deps() {
+    for (module_path, dep) in locator.deps() {
         requires.push(format!("\t{} {}", module_path, dep.version));
     }
 

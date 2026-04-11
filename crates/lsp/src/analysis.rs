@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miette::Diagnostic as MietteDiagnostic;
 use tower_lsp::lsp_types::*;
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 use diagnostics::LisetteDiagnostic;
 use semantics::analyze::{AnalyzeInput, CompilePhase, SemanticConfig, analyze};
 use syntax::desugar;
@@ -88,12 +88,12 @@ impl SharedState {
             .map(Into::into)
             .collect();
 
-        let (go_resolver, manifest_error) = if config.standalone_mode {
-            (GoDepResolver::default(), None)
+        let (locator, manifest_error) = if config.standalone_mode {
+            (TypedefLocator::default(), None)
         } else {
-            match GoDepResolver::from_project(&config.root) {
+            match TypedefLocator::from_project(&config.root) {
                 Ok(r) => (r, None),
-                Err(msg) => (GoDepResolver::default(), Some(msg)),
+                Err(msg) => (TypedefLocator::default(), Some(msg)),
             }
         };
 
@@ -113,7 +113,7 @@ impl SharedState {
                 Some(config.root.clone())
             },
             compile_phase: CompilePhase::Check,
-            go_resolver,
+            locator,
         });
 
         if has_parse_errors {

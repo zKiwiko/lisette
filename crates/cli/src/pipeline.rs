@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 use diagnostics::LisetteDiagnostic;
 use emit::{EmitOptions, Emitter, OutputFile};
 
@@ -26,7 +26,7 @@ pub struct CompileConfig {
     pub load_siblings: bool,
     pub debug: bool,
     pub project_root: Option<PathBuf>,
-    pub go_resolver: GoDepResolver,
+    pub locator: TypedefLocator,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ pub fn compile(
         ast: syntax_result.ast,
         project_root: config.project_root.clone(),
         compile_phase: config.target_phase,
-        go_resolver: config.go_resolver.clone(),
+        locator: config.locator.clone(),
     });
 
     let sources: HashMap<u32, SourceInfo> = semantic_result

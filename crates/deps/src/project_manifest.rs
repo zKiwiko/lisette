@@ -90,9 +90,9 @@ impl Manifest {
 }
 
 pub fn parse_manifest(project_root: &Path) -> Result<Manifest, String> {
-    let toml_path = project_root.join("lisette.toml");
+    let project_toml_path = project_root.join("lisette.toml");
 
-    let content = fs::read_to_string(&toml_path)
+    let content = fs::read_to_string(&project_toml_path)
         .map_err(|_| format!("No `lisette.toml` manifest in `{}`", project_root.display()))?;
 
     toml::from_str(&content).map_err(|e| format!("Invalid `lisette.toml` manifest: {}", e))
@@ -110,6 +110,96 @@ pub fn check_toolchain_version(manifest: &Manifest) -> Result<(), String> {
             toolchain.lis, running,
         ));
     }
+
+    Ok(())
+}
+
+/// Add or update a Go dependency in `lisette.toml`.
+///
+/// ```text
+/// "github.com/gorilla/mux" = "v1.8.0"
+/// "github.com/gorilla/context" = { version = "v1.1.1", via = ["github.com/gorilla/mux"] }
+/// ```
+#[allow(dead_code)]
+pub fn write_go_dep_to_manifest(
+    project_root: &Path,
+    module_path: &str,
+    version: &str,
+    via: Option<Vec<String>>,
+) -> Result<(), String> {
+    let manifest_toml_path = project_root.join("lisette.toml");
+    let manifest_content = fs::read_to_string(&manifest_toml_path)
+        .map_err(|e| format!("Failed to read `lisette.toml`: {}", e))?;
+
+    let mut manifest: toml_edit::DocumentMut = manifest_content
+        .parse()
+        .map_err(|e| format!("Failed to parse `lisette.toml`: {}", e))?;
+
+    if manifest.get("dependencies").is_none() {
+        let mut table = toml_edit::Table::new();
+        table.set_implicit(true);
+        manifest.insert("dependencies", toml_edit::Item::Table(table));
+    }
+
+    let deps = manifest["dependencies"]
+        .as_table_mut()
+        .ok_or("Invalid `lisette.toml`: `dependencies` is not a table")?;
+
+    if deps.get("go").is_none() {
+        deps.insert("go", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+
+    let go = deps["go"]
+        .as_table_mut()
+        .ok_or("Invalid `lisette.toml`: `dependencies.go` is not a table")?;
+
+    match via {
+        Some(mut via_list) => {
+            via_list.sort();
+            via_list.dedup();
+            let mut inline = toml_edit::InlineTable::new();
+            inline.insert("version", version.into());
+            let mut arr = toml_edit::Array::new();
+            for v in &via_list {
+                arr.push(v.as_str());
+            }
+            inline.insert("via", toml_edit::Value::Array(arr));
+            go.insert(
+                module_path,
+                toml_edit::value(toml_edit::Value::InlineTable(inline)),
+            );
+        }
+        None => {
+            go.insert(module_path, toml_edit::value(version));
+        }
+    }
+
+    fs::write(&manifest_toml_path, manifest.to_string())
+        .map_err(|e| format!("Failed to write `lisette.toml`: {}", e))?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn remove_go_dep_from_manifest(project_root: &Path, go_dep_path: &str) -> Result<(), String> {
+    let manifest_toml_path = project_root.join("lisette.toml");
+    let manifest_content = fs::read_to_string(&manifest_toml_path)
+        .map_err(|e| format!("Failed to read `lisette.toml`: {}", e))?;
+
+    let mut manifest: toml_edit::DocumentMut = manifest_content
+        .parse()
+        .map_err(|e| format!("Failed to parse `lisette.toml`: {}", e))?;
+
+    if let Some(deps) = manifest
+        .get_mut("dependencies")
+        .and_then(|d| d.as_table_mut())
+        && let Some(go) = deps.get_mut("go").and_then(|g| g.as_table_mut())
+    {
+        go.remove(go_dep_path);
+    }
+
+    fs::write(&manifest_toml_path, manifest.to_string())
+        .map_err(|e| format!("Failed to write `lisette.toml`: {}", e))?;
 
     Ok(())
 }

@@ -7,8 +7,8 @@ use semantics::store::Store;
 
 use crate::_harness::filesystem::MockFileSystem;
 
-fn default_resolver() -> deps::GoDepResolver {
-    deps::GoDepResolver::default()
+fn default_resolver() -> deps::TypedefLocator {
+    deps::TypedefLocator::default()
 }
 
 fn has_diagnostic_code(sink: &DiagnosticSink, code: &str) -> bool {
@@ -221,7 +221,7 @@ fn graph_declared_dep_missing_typedef() {
             via: None,
         },
     );
-    let resolver = deps::GoDepResolver::new(go_deps, None, None);
+    let resolver = deps::TypedefLocator::new(go_deps, None, None);
 
     let sink = DiagnosticSink::new();
     let _result = build_module_graph(&mut store, Some(&fs), "main", &sink, false, &resolver);
@@ -298,9 +298,9 @@ fn stdlib_cache_excludes_third_party_modules() {
     let third_party = "go:github.com/gorilla/mux";
     let stdlib = "go:net/http";
 
-    // The canonical check: deps::has_domain returns true for third-party
+    // The canonical check: deps::is_third_party returns true for third-party
     // paths (dot in first segment), false for stdlib paths.
-    let is_stdlib_go = |id: &str| id.strip_prefix("go:").is_some_and(|p| !deps::has_domain(p));
+    let is_stdlib_go = |id: &str| id.strip_prefix("go:").is_some_and(deps::is_stdlib);
 
     assert!(!is_stdlib_go(third_party));
     assert!(is_stdlib_go(stdlib));
@@ -363,7 +363,7 @@ fn resolver_root_vs_subpackage_typedef_lookup() {
             via: None,
         },
     );
-    let resolver = deps::GoDepResolver::new(
+    let resolver = deps::TypedefLocator::new(
         go_deps,
         None,
         Some(tmp.path().join("home").to_string_lossy().to_string()),
@@ -371,7 +371,7 @@ fn resolver_root_vs_subpackage_typedef_lookup() {
 
     // Root package resolves to root .d.lis
     match resolver.find_typedef_content("github.com/gorilla/mux") {
-        deps::GoTypedefResult::Found {
+        deps::TypedefLocatorResult::Found {
             content: source, ..
         } => {
             assert!(source.contains("root"));
@@ -381,7 +381,7 @@ fn resolver_root_vs_subpackage_typedef_lookup() {
 
     // Subpackage resolves to subpackage .d.lis
     match resolver.find_typedef_content("github.com/gorilla/mux/middleware") {
-        deps::GoTypedefResult::Found {
+        deps::TypedefLocatorResult::Found {
             content: source, ..
         } => {
             assert!(source.contains("sub"));
@@ -416,7 +416,7 @@ fn third_party_go_struct_impl_methods_registered() {
             via: None,
         },
     );
-    let resolver = deps::GoDepResolver::new(go_deps, None, Some(home));
+    let resolver = deps::TypedefLocator::new(go_deps, None, Some(home));
 
     let source = r#"
 import "go:github.com/gorilla/mux"
@@ -447,7 +447,7 @@ fn main() {
         ast: build_result.ast,
         project_root: None,
         compile_phase: CompilePhase::Check,
-        go_resolver: resolver,
+        locator: resolver,
     });
 
     let impl_errors: Vec<_> = result
@@ -501,7 +501,7 @@ fn stdlib_cache_save_load_excludes_third_party() {
             via: None,
         },
     );
-    let resolver = deps::GoDepResolver::new(go_deps, None, Some(home));
+    let resolver = deps::TypedefLocator::new(go_deps, None, Some(home));
 
     let source = r#"
 import "go:github.com/gorilla/mux"
@@ -533,7 +533,7 @@ fn main() {
         ast: build_result.ast.clone(),
         project_root: None,
         compile_phase: CompilePhase::Check,
-        go_resolver: resolver.clone(),
+        locator: resolver.clone(),
     });
 
     assert!(
@@ -555,7 +555,7 @@ fn main() {
         ast: build_result.ast,
         project_root: None,
         compile_phase: CompilePhase::Check,
-        go_resolver: resolver,
+        locator: resolver,
     });
 
     assert!(

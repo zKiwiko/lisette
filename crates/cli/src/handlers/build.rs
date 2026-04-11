@@ -22,18 +22,17 @@ pub fn build(path: Option<String>, debug: bool, quiet: bool) -> i32 {
         return 1;
     }
 
-    let (manifest, go_resolver) =
-        match deps::GoDepResolver::from_project_with_manifest(project_path) {
-            Ok(pair) => pair,
-            Err(msg) => {
-                cli_error!(
-                    "Failed to compile Lisette project to Go",
-                    msg,
-                    "Run `lis new <name>` to create a project, or fix `lisette.toml`"
-                );
-                return 1;
-            }
-        };
+    let (manifest, locator) = match deps::TypedefLocator::from_project_with_manifest(project_path) {
+        Ok(pair) => pair,
+        Err(msg) => {
+            cli_error!(
+                "Failed to compile Lisette project to Go",
+                msg,
+                "Run `lis new <name>` to create a project, or fix `lisette.toml`"
+            );
+            return 1;
+        }
+    };
 
     let main_lis = project_path.join("src/main.lis");
     let go_module_name = &manifest.project.name;
@@ -81,7 +80,7 @@ pub fn build(path: Option<String>, debug: bool, quiet: bool) -> i32 {
         load_siblings: true,
         debug,
         project_root: Some(project_path.to_path_buf()),
-        go_resolver: go_resolver.clone(),
+        locator: locator.clone(),
     };
 
     let source_dir = main_lis.parent().and_then(|p| p.to_str()).unwrap_or(".");
@@ -124,7 +123,7 @@ pub fn build(path: Option<String>, debug: bool, quiet: bool) -> i32 {
         return 1;
     }
 
-    if let Err(e) = go_cli::write_go_mod(&target_dir, &compile_config.go_module, &go_resolver) {
+    if let Err(e) = go_cli::write_go_mod(&target_dir, &compile_config.go_module, &locator) {
         cli_error!(
             "Failed to compile Lisette project to Go",
             e,

@@ -5,7 +5,7 @@ use diagnostics::{DiagnosticSink, SemanticResult};
 use syntax::ast::Expression;
 use syntax::program::{File, ModuleInfo, MutationInfo, UnusedInfo};
 
-use deps::GoDepResolver;
+use deps::TypedefLocator;
 
 use crate::cache::{
     CompiledModule, compute_module_hash, get_dependency_module_hashes,
@@ -45,7 +45,7 @@ pub struct AnalyzeInput<'a> {
     pub ast: Vec<Expression>,
     pub project_root: Option<PathBuf>,
     pub compile_phase: CompilePhase,
-    pub go_resolver: GoDepResolver,
+    pub locator: TypedefLocator,
 }
 
 pub fn analyze(input: AnalyzeInput) -> (SemanticResult, Facts) {
@@ -81,7 +81,7 @@ pub fn analyze(input: AnalyzeInput) -> (SemanticResult, Facts) {
         &entry_module,
         &sink,
         input.config.standalone_mode,
-        &input.go_resolver,
+        &input.locator,
     );
 
     for cycle in &graph_result.cycles {
@@ -129,20 +129,20 @@ pub fn analyze(input: AnalyzeInput) -> (SemanticResult, Facts) {
 
         for module_id in order {
             if let Some(go_pkg) = module_id.strip_prefix("go:") {
-                let is_third_party = deps::has_domain(go_pkg);
-
-                if !is_third_party && let Some(ref cache) = go_cache {
+                if deps::is_stdlib(go_pkg)
+                    && let Some(ref cache) = go_cache
+                {
                     load_cached_go_module(checker.store, &module_id, cache);
                     if checker.store.is_visited(&module_id) {
                         continue;
                     }
                 }
 
-                if let deps::GoTypedefResult::Found {
+                if let deps::TypedefLocatorResult::Found {
                     content: source, ..
-                } = input.go_resolver.find_typedef_content(go_pkg)
+                } = input.locator.find_typedef_content(go_pkg)
                 {
-                    checker.parse_and_register_go_module(&module_id, &source, &input.go_resolver);
+                    checker.parse_and_register_go_module(&module_id, &source, &input.locator);
                 }
                 continue;
             }
@@ -204,7 +204,7 @@ pub fn analyze(input: AnalyzeInput) -> (SemanticResult, Facts) {
                 .store
                 .modules
                 .keys()
-                .filter(|id| id.strip_prefix("go:").is_some_and(|p| !deps::has_domain(p)))
+                .filter(|id| id.strip_prefix("go:").is_some_and(deps::is_stdlib))
                 .cloned()
                 .collect();
             let needs_save = !all_go_modules.is_empty()

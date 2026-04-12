@@ -30,17 +30,20 @@ body = '''
 ## [{{ version }}](https://github.com/ivov/lisette/compare/lisette-v{{ previous.version }}...lisette-v{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
 {% for commit in commits %}
 {%- set subject = commit.raw_message | split(pat="\n") | first | trim -%}
-{%- if subject is matching("\(#\d+\)$") -%}
-{%- set parts = subject | split(pat=" (#") -%}
-{%- set pr = parts | last | split(pat=")") | first -%}
-{%- set head = parts | slice(end=-1) | join(sep=" (#") %}
-- {{ head }} ([#{{ pr }}](https://github.com/ivov/lisette/pull/{{ pr }}))
+{%- set sha = commit.id | truncate(length=7, end="") -%}
+{%- if subject is matching("\(\[#\d+\]\([^)]*\)\)$") -%}
+{%- set head = subject | split(pat=" ([#") | slice(end=-1) | join(sep=" ([#") -%}
+{%- set pr = subject | split(pat="[#") | last | split(pat="]") | first %}
+- {{ head }} [#{{ pr }}](https://github.com/ivov/lisette/pull/{{ pr }}) [`{{ sha }}`](https://github.com/ivov/lisette/commit/{{ commit.id }})
 {%- else %}
-- {{ subject }} ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/ivov/lisette/commit/{{ commit.id }}))
+- {{ subject }} [`{{ sha }}`](https://github.com/ivov/lisette/commit/{{ commit.id }})
 {%- endif %}
 {%- endfor %}
 
 '''
+commit_preprocessors = [
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/ivov/lisette/pull/${1}))" },
+]
 commit_parsers = [
   { message = "^chore: bump stdlib typedefs", skip = true },
   { message = ".*", group = "all" },

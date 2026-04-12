@@ -1,114 +1,112 @@
 # Changelog
 
+Lisette is under active development. Any version before 1.0.0 may include breaking changes.
+
 ## [0.1.8](https://github.com/ivov/lisette/compare/lisette-v0.1.7...lisette-v0.1.8) - 2026-04-12
 
-- feat: groundwork for lis add command ([#55](https://github.com/ivov/lisette/pull/55)) ([`e4a15e7`](https://github.com/ivov/lisette/commit/e4a15e7a4937ad498d21f67a20b0e86f1e717596))
-- refactor: reorganize deps crate ([`09beac3`](https://github.com/ivov/lisette/commit/09beac374f09f4766d67598a203d41eabf8a70bd))
-- refactor: simplify bindgen invocation ([`262cc20`](https://github.com/ivov/lisette/commit/262cc20c20cad53d61415b0538f4cf9be7a65dc2))
-- fix: reject relative-path imports with clear diagnostic ([#58](https://github.com/ivov/lisette/pull/58)) ([`21389f0`](https://github.com/ivov/lisette/commit/21389f0264e60da9d7dcf8eb6d8398bd2c82c810))
-- fix: register impl blocks after sibling-file type definitions ([#57](https://github.com/ivov/lisette/pull/57)) ([`85a0d5f`](https://github.com/ivov/lisette/commit/85a0d5fe72f1c226fe8a59eacb33c2d7a9667359))
-- refactor: simplify typedef resolver ([#50](https://github.com/ivov/lisette/pull/50)) ([`07a7a45`](https://github.com/ivov/lisette/commit/07a7a453b2deeef6660a5e2f56f66801af3012bc))
+- chore: render changelog as flat list of all commits [`08d6a72`](https://github.com/ivov/lisette/commit/08d6a72e6f83d97b1a9e531b639554432f7eefde)
+- feat: groundwork for lis add command [#55](https://github.com/ivov/lisette/pull/55) [`e4a15e7`](https://github.com/ivov/lisette/commit/e4a15e7a4937ad498d21f67a20b0e86f1e717596)
+- fix: reject relative-path imports with clear diagnostic [#58](https://github.com/ivov/lisette/pull/58) [`21389f0`](https://github.com/ivov/lisette/commit/21389f0264e60da9d7dcf8eb6d8398bd2c82c810)
+- fix: register impl blocks after sibling-file type definitions [#57](https://github.com/ivov/lisette/pull/57) [`85a0d5f`](https://github.com/ivov/lisette/commit/85a0d5fe72f1c226fe8a59eacb33c2d7a9667359)
+- refactor: reorganize deps crate [`09beac3`](https://github.com/ivov/lisette/commit/09beac374f09f4766d67598a203d41eabf8a70bd)
+- refactor: simplify bindgen invocation [`262cc20`](https://github.com/ivov/lisette/commit/262cc20c20cad53d61415b0538f4cf9be7a65dc2)
+- refactor: simplify typedef resolver [#50](https://github.com/ivov/lisette/pull/50) [`07a7a45`](https://github.com/ivov/lisette/commit/07a7a453b2deeef6660a5e2f56f66801af3012bc)
 
 ## [0.1.7](https://github.com/ivov/lisette/compare/lisette-v0.1.6...lisette-v0.1.7) - 2026-04-11
 
-### Chore
-
-- include license file in published crates ([#48](https://github.com/ivov/lisette/pull/48))
-
-### Feat
-
-- publish bindgen as a Go module ([#47](https://github.com/ivov/lisette/pull/47))
-- compiler awareness of third-party Go deps ([#44](https://github.com/ivov/lisette/pull/44))
-
-### Fix
-
-- resolve Forall gracefully and add registration to fuzz target
-- validate type parameter bounds on type definitions ([#43](https://github.com/ivov/lisette/pull/43))
+- chore: include license file in published crates [#48](https://github.com/ivov/lisette/pull/48) [`e7a6205`](https://github.com/ivov/lisette/commit/e7a62053f6f34f41a68a679286cab1f63fcfbbf7)
+- feat: publish bindgen as a Go module [#47](https://github.com/ivov/lisette/pull/47) [`0c2b480`](https://github.com/ivov/lisette/commit/0c2b4800bad2933c9832106963dc77c629c39138)
+- feat: compiler awareness of third-party Go deps [#44](https://github.com/ivov/lisette/pull/44) [`88ff1a6`](https://github.com/ivov/lisette/commit/88ff1a6acf3d535eda6b21f178861a0bb51160dd)
+- fix: validate type parameter bounds on type definitions [#43](https://github.com/ivov/lisette/pull/43) [`0191647`](https://github.com/ivov/lisette/commit/0191647e20a5f19d3b0b2782992b8f56ee3d5a23)
+- fix: use program::Visibility in fuzz infer target [`41ca5bb`](https://github.com/ivov/lisette/commit/41ca5bb2b796ddd30bd9f46b475da034dc1e3ee2)
+- chore: update fuzz lockfile versions to v0.1.6 [`1423dca`](https://github.com/ivov/lisette/commit/1423dcab49b4ee15ad9b8b82177f38d8243984d3)
+- fix: resolve Forall gracefully and add registration to fuzz target [`480ca6e`](https://github.com/ivov/lisette/commit/480ca6e32810d9e6b002a387a14face4934cd8c2)
 
 ## [0.1.6](https://github.com/ivov/lisette/compare/lisette-v0.1.5...lisette-v0.1.6) - 2026-04-09
 
-### Feat
-
-- add `completions` CLI command ([#39](https://github.com/ivov/lisette/pull/39))
-
-### Fix
-
-- minor cli adjustments ([#40](https://github.com/ivov/lisette/pull/40))
-- deduplicate diagnostics for const type annotations
-- deduplicate diagnostics for function signature annotations
-- resolve non-generic type aliases as qualifiers cross-module ([#37](https://github.com/ivov/lisette/pull/37))
+- fix: deduplicate diagnostics for const type annotations [`09f7d2c`](https://github.com/ivov/lisette/commit/09f7d2c536f21be76bd4cd5ec62783ce966f5d5b)
+- fix: deduplicate diagnostics for function signature annotations [`a5f70a7`](https://github.com/ivov/lisette/commit/a5f70a74302b335586a28715c7ac2f9f5980fd6c)
+- fix: minor cli adjustments [#40](https://github.com/ivov/lisette/pull/40) [`ef2d431`](https://github.com/ivov/lisette/commit/ef2d4311d62b1195e67f6ba34b23ad6ddd033902)
+- docs: add favicon [`f5ef52c`](https://github.com/ivov/lisette/commit/f5ef52c7ef7c6438ddfbafb33e7123d33cadff62)
+- feat: add `completions` CLI command [#39](https://github.com/ivov/lisette/pull/39) [`907b630`](https://github.com/ivov/lisette/commit/907b6304d904e306a88118a9d951a3c76e0e5fa2)
+- chore: exclude stdlib typedef bumps from changelog [`a55f520`](https://github.com/ivov/lisette/commit/a55f52030c35ec9e390d08e6324b6f98e9e59a14)
+- fix: resolve non-generic type aliases as qualifiers cross-module [#37](https://github.com/ivov/lisette/pull/37) [`1a4c743`](https://github.com/ivov/lisette/commit/1a4c7439fe1144fb08caf40d47bf7ee9a1df4d6d)
+- ci: guard release comment calls against transient failures [`2b90fe0`](https://github.com/ivov/lisette/commit/2b90fe0ef3a37c606b85ab3bc8a712c5c348906d)
+- ci: add issues write permission for release comments [`f4ed6b1`](https://github.com/ivov/lisette/commit/f4ed6b13484ff66be49eda84d46316ea9f0162e6)
+- chore: auto-commit stdlib typedefs in regeneration recipe [`aebc6a2`](https://github.com/ivov/lisette/commit/aebc6a26edc7bfde3283b3a0ef55f2c37bb810b7)
 
 ## [0.1.5](https://github.com/ivov/lisette/compare/lisette-v0.1.4...lisette-v0.1.5) - 2026-04-08
 
-### Fixed
-
-- skip pattern analysis on import cycle ([#34](https://github.com/ivov/lisette/pull/34))
-- interface subtype satisfaction through type variables ([#31](https://github.com/ivov/lisette/pull/31))
+- ci: comment on closed issues in release workflow [`73143dc`](https://github.com/ivov/lisette/commit/73143dc4bb5a3936da2da82e25ec72b435250dd7)
+- fix: skip pattern analysis on import cycle [#34](https://github.com/ivov/lisette/pull/34) [`88eb7fa`](https://github.com/ivov/lisette/commit/88eb7fae5cf4ef71ee205722d16e7ab7c4d0039b)
+- feat: add playground to docs site [#27](https://github.com/ivov/lisette/pull/27) [`d917711`](https://github.com/ivov/lisette/commit/d917711bd556bd6e8e747e4000ec2454686d42a7)
+- fix: interface subtype satisfaction through type variables [#31](https://github.com/ivov/lisette/pull/31) [`020c407`](https://github.com/ivov/lisette/commit/020c407a88e5556151afe173286fada1f26a1b8b)
+- ci: skip check job on release-plz commits [`2497b62`](https://github.com/ivov/lisette/commit/2497b62e6531a9a201f1facc2df8e90c997ee3a4)
 
 ## [0.1.4](https://github.com/ivov/lisette/compare/lisette-v0.1.3...lisette-v0.1.4) - 2026-04-07
 
-### Added
-
-- *(editors)* add info for helix ([#21](https://github.com/ivov/lisette/pull/21))
-
-### Fixed
-
-- add typo suggestions for CLI subcommands ([#23](https://github.com/ivov/lisette/pull/23))
-- support octal escape sequences ([#22](https://github.com/ivov/lisette/pull/22))
-- ice when calling generic type as function ([#28](https://github.com/ivov/lisette/pull/28))
-- skip auto-generated stringer on user string + goString
-- swap string method for go string method ([#17](https://github.com/ivov/lisette/pull/17))
+- ci: comment on PRs included in a release [`04b5a82`](https://github.com/ivov/lisette/commit/04b5a8273a75079c500abb9d1fd15157413a043d)
+- feat(editors): add info for helix [#21](https://github.com/ivov/lisette/pull/21) [`7f9cd3c`](https://github.com/ivov/lisette/commit/7f9cd3c9ea2f6d2007f825e27e762d72a311d325)
+- fix: skip auto-generated stringer on user string + goString [`cc45b35`](https://github.com/ivov/lisette/commit/cc45b35af73496476e5ed77e6b9f0809f962ccdb)
+- fix: swap string method for go string method [#17](https://github.com/ivov/lisette/pull/17) [`891cf8d`](https://github.com/ivov/lisette/commit/891cf8d9c49d98b3c12156858fd6579a9e75fffc)
+- fix: ice when calling generic type as function [#28](https://github.com/ivov/lisette/pull/28) [`02ec377`](https://github.com/ivov/lisette/commit/02ec377932aea690e949257f171a4e6b014dc15a)
+- fix: support octal escape sequences [#22](https://github.com/ivov/lisette/pull/22) [`a9a5872`](https://github.com/ivov/lisette/commit/a9a5872374f9d582c2cd18c5585b95b2e2d02188)
+- fix: add typo suggestions for CLI subcommands [#23](https://github.com/ivov/lisette/pull/23) [`befe96a`](https://github.com/ivov/lisette/commit/befe96aa284c41b3d55f2b18e22525980eaa24f4)
+- docs: update Zed extension PR link [`2f76686`](https://github.com/ivov/lisette/commit/2f76686f3bd4d54ca99303a8d5e20a3f1609e354)
 
 ## [0.1.3](https://github.com/ivov/lisette/compare/lisette-v0.1.2...lisette-v0.1.3) - 2026-04-06
 
-### Added
-
-- add version override to bindgen stdlib command
-
-### Fixed
-
-- add Partial<T, E> for non-exclusive (T, error) returns ([#18](https://github.com/ivov/lisette/pull/18))
-- guard against stack overflow from chained postfix operators
-- make prelude variant name registration collision-safe
-- decouple diagnostic coloring from environment ([#6](https://github.com/ivov/lisette/pull/6))
-- detect typed nils in Go interface wrapping
-
-### Other
-
-- replace DiscardedTailFact boolean with enum
-- match nested files in lefthook format check glob
-- regenerate stdlib typedefs
+- chore: add pre-1.0 breaking changes policy [`9ccebaa`](https://github.com/ivov/lisette/commit/9ccebaa7a495beb8f5aaa7c739a51850981ef0c6)
+- fix: add Partial<T, E> for non-exclusive (T, error) returns [#18](https://github.com/ivov/lisette/pull/18) [`9887612`](https://github.com/ivov/lisette/commit/98876122ecc5c7c4b72417233005c6088c6102c4)
+- docs: note Zed extension is pending review [`f2cdfa3`](https://github.com/ivov/lisette/commit/f2cdfa3cc20224d8389668087d523ac21953e90f)
+- fix: make prelude variant name registration collision-safe [`0cc21aa`](https://github.com/ivov/lisette/commit/0cc21aa98fdf2256ef10f168d4f09ed6e6cb6565)
+- refactor: replace DiscardedTailFact boolean with enum [`d7e9103`](https://github.com/ivov/lisette/commit/d7e91033ae2be001b029b2f310eb25af6d395243)
+- chore: remove .cargo from gitignore [`a1836f4`](https://github.com/ivov/lisette/commit/a1836f40d5ada27db809193801ce5dddfdba92e7)
+- chore: remove stale comment [`6e17d01`](https://github.com/ivov/lisette/commit/6e17d015aec8d6592538dff3235f75fd09137e0c)
+- fix: decouple diagnostic coloring from environment [#6](https://github.com/ivov/lisette/pull/6) [`b5164b3`](https://github.com/ivov/lisette/commit/b5164b398265a567605b5a7311248886d347dc74)
+- ci: add cargo-deny for dependency auditing [`a377264`](https://github.com/ivov/lisette/commit/a3772645d29f74173d2559134db5ad4491946fd0)
+- ci: pin Rust toolchain via rust-toolchain.toml [`fb092e5`](https://github.com/ivov/lisette/commit/fb092e5fe245ce3efc7e09da393127c23ceffefb)
+- fix: guard against stack overflow from chained postfix operators [`7d66c55`](https://github.com/ivov/lisette/commit/7d66c555ebe1ac6029f760c5adee063cac9c81cf)
+- chore: clean up changelog and release-plz config [`d8cd590`](https://github.com/ivov/lisette/commit/d8cd590c2390a65dc68a552c9ba4be9cfc917cea)
+- chore: match nested files in lefthook format check glob [`b1afdcc`](https://github.com/ivov/lisette/commit/b1afdccee07aede687060517b7206527c58aa163)
+- feat: add version override to bindgen stdlib command [`5e2cba4`](https://github.com/ivov/lisette/commit/5e2cba43fd3d76fa46508777618ea12c85ece83f)
+- fix: wrap interface globals in Option when not provably non-nil [`2703398`](https://github.com/ivov/lisette/commit/270339884ed000af61225a2af297c6d3ce951025)
+- chore: regenerate stdlib typedefs [`b7324fb`](https://github.com/ivov/lisette/commit/b7324fb8bea0f1c9cd8feb642c6bff021569450d)
+- fix: detect typed nils in Go interface wrapping [`7325047`](https://github.com/ivov/lisette/commit/73250472dbf48e4d527ba5f499794717e0759ed3)
 
 ## [0.1.2](https://github.com/ivov/lisette/compare/lisette-v0.1.1...lisette-v0.1.2) - 2026-03-31
 
-### Added
-
-- add quickstart link to CLI help and redirect page
-- show nil diagnostic for null, Nil, and undefined
-
-### Fixed
-
-- improve doc help text colors, examples, and description
-- fold Range sub-expressions in AstFolder
-- prevent OOM by lowering max parser errors to 50
-- prevent subtraction overflow in span calculation
-- lower parser max depth to 64 to prevent stack overflow
-- lower parser max depth to prevent stack overflow under asan
-- remove unnecessary borrow in nil diagnostic format
-
-### Other
-
-- improve CLI help consistency and hide internal commands
+- fix: fold Range sub-expressions in AstFolder [`2d357f1`](https://github.com/ivov/lisette/commit/2d357f179f8f4536b5bc723fad55b438dc2113cf)
+- fix: prevent OOM by lowering max parser errors to 50 [`c123f33`](https://github.com/ivov/lisette/commit/c123f33fc5c674d96dff66f60622e9bb802b4059)
+- fix: prevent subtraction overflow in span calculation [`b47b218`](https://github.com/ivov/lisette/commit/b47b2180bde5b112f6c2365c2f4ad94431c0e61c)
+- fix: remove unnecessary borrow in nil diagnostic format [`7e576be`](https://github.com/ivov/lisette/commit/7e576beaee77f68f46093327941a05d0ad39ed31)
+- refactor: improve CLI help consistency and hide internal commands [`b0aa140`](https://github.com/ivov/lisette/commit/b0aa14063ef1117fa3feb8708ecd08b7348b0032)
+- fix: improve doc help text colors, examples, and description [`ac3554a`](https://github.com/ivov/lisette/commit/ac3554a6e7003271412ff3fe937aedacfb7d58cb)
+- feat: add quickstart link to CLI help and redirect page [`62ef1fe`](https://github.com/ivov/lisette/commit/62ef1fe5b53c90a51d4cae35b34d15e21a730c05)
+- feat: show nil diagnostic for null, Nil, and undefined [`29f68a0`](https://github.com/ivov/lisette/commit/29f68a0ecef93afc3630c5939943a7765e062d1d)
+- chore: update fuzz lockfile to workspace version 0.1.1 [`612b97c`](https://github.com/ivov/lisette/commit/612b97cf241f839a48461d6d1ba1e2cf6b73bc09)
+- fix: lower parser max depth to 64 to prevent stack overflow [`1ab2b6c`](https://github.com/ivov/lisette/commit/1ab2b6cff453f6484dc504e5e09debcf8048b3f5)
+- ci: enable changelog for main crate with cross-crate commits [`32d8819`](https://github.com/ivov/lisette/commit/32d8819407e7ce7f0bdf622258fcdb89d7509bb1)
+- docs: open GitHub links in new tab and clean up repo URL [`809a73f`](https://github.com/ivov/lisette/commit/809a73f21e74349bce4b5a41276fdbd62b885736)
+- ci: only create git tags and releases for main crate [`de15d96`](https://github.com/ivov/lisette/commit/de15d96e0dd75985da76d9cc9556572adda27191)
+- docs: remove stray middot [`95589ab`](https://github.com/ivov/lisette/commit/95589ab87bea73c605d4559d54c1be95d109bc81)
+- docs: trim unused font weights from Google Fonts request [`6b5c5f3`](https://github.com/ivov/lisette/commit/6b5c5f358431434fe47a4aca96807c7db810d0e8)
+- docs: make homepage mobile-responsive [`b3c7dad`](https://github.com/ivov/lisette/commit/b3c7dad8b4676a6b9c810ce5587eb331718ea620)
+- ci: restore release-plz prepare job and push trigger [`6789dab`](https://github.com/ivov/lisette/commit/6789dabb023746d54f60c94424f98cbe942600bf)
+- fix: lower parser max depth to prevent stack overflow under asan [`97ebe8b`](https://github.com/ivov/lisette/commit/97ebe8bd7a3473aae8febf7b023a8bef883763b4)
 
 ## [0.1.1](https://github.com/ivov/lisette/compare/lisette-v0.1.0...lisette-v0.1.1) - 2026-03-21
 
-### Fixed
-
-- ensure complete go.sum before running go build
-- resolve prelude path for crates.io packaging
+- chore: bump version to 0.1.1 [`318e9a4`](https://github.com/ivov/lisette/commit/318e9a4093c8c47c87b9aa916a019bb066c317ff)
+- chore: add readme path for crates.io [`95ecb00`](https://github.com/ivov/lisette/commit/95ecb009a8c174070a9e7a407facd406184bebb8)
+- fix: ensure complete go.sum before running go build [`316b799`](https://github.com/ivov/lisette/commit/316b7993cc2b7edbb9d23b6577f207d95dec1612)
+- docs: fix neovim plugin installation instructions [`fa234a6`](https://github.com/ivov/lisette/commit/fa234a62c20b2b595d8c59895f709d4870554b95)
+- chore: include bindgen go.mod in version sync check [`fce89ab`](https://github.com/ivov/lisette/commit/fce89ab29cdad0d12dc9727f45aa82bd146ee8dc)
+- refactor: move go version to standalone file [`6d61563`](https://github.com/ivov/lisette/commit/6d61563c8686e761d8bb75ce7ddc038abd0a1f5a)
+- fix: resolve prelude path for crates.io packaging [`c8b0960`](https://github.com/ivov/lisette/commit/c8b09606eebc7ec01d9df1d75b6169f738e14a5d)
+- chore: update zed extension grammar rev [`64004e2`](https://github.com/ivov/lisette/commit/64004e2d1b97c1e33ec3204ffb0d4028bef3c488)
 
 ## [0.1.0](https://github.com/ivov/lisette/releases/tag/lisette-v0.1.0) - 2026-03-21
 
-### Added
+- feat: initial release v0.1.0 [`a2fbd9d`](https://github.com/ivov/lisette/commit/a2fbd9d956ba38f52a456c5ad51da30e4bacdd1f)
 
-- initial release v0.1.0

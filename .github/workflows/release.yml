@@ -31,7 +31,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    name: Publish prelude to Go proxy and compiler to crates.io
+    name: Publish Go modules to Go proxy and compiler to crates.io
     runs-on: ubuntu-latest
     permissions:
       contents: write

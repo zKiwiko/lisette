@@ -101,6 +101,10 @@ func shouldConvertToOption(boolName string, conv *Converter, qualifiedName strin
 	return true
 }
 
+// maxReturnTupleArity mirrors MAX_TUPLE_ARITY in
+// crates/syntax/src/parse/mod.rs.
+const maxReturnTupleArity = 5
+
 func collectReturnTypes(results *types.Tuple, start, end int, seen map[types.Type]bool, conv *Converter) TypeResult {
 	count := end - start
 
@@ -110,6 +114,13 @@ func collectReturnTypes(results *types.Tuple, start, end int, seen map[types.Typ
 
 	if count == 1 {
 		return toLisetteRecursive(results.At(start).Type(), seen, conv)
+	}
+
+	if count > maxReturnTupleArity {
+		return TypeResult{SkipReason: &SkipReason{
+			Code:    "tuple-too-large",
+			Message: fmt.Sprintf("%d-element return tuple exceeds Lisette's %d-element limit", count, maxReturnTupleArity),
+		}}
 	}
 
 	var elems []string

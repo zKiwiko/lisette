@@ -16,10 +16,10 @@ Safe and expressive:
 
 Quietly practical:
 
-- Interop with Go standard library
+- Interop with Go ecosystem (WIP)
 - Linter, formatter, 250+ diagnostics
 - Fast incremental compiler, readable Go
-- LSP support for VSCode, Neovim, Zed, Helix
+- LSP for VSCode, Neovim, Zed, Helix, GoLand
 
 ## Quick tour
 

@@ -336,7 +336,11 @@ fn translate_go_error(args: &[&str], stderr: &str) -> String {
             module
         );
     }
-    if stderr.contains("invalid version") || stderr.contains("should be v0 or v1") {
+
+    let target_version_error =
+        !target.is_empty() && stderr.contains(&format!("{}: invalid version", target));
+
+    if target_version_error {
         return format!(
             "Invalid Go module version in `{}` (must look like `v1.2.3`)",
             target

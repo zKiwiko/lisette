@@ -60,8 +60,10 @@ func LoadPackage(path string) (*packages.Package, error) {
 
 	pkg := pkgs[0]
 
-	if len(pkg.Errors) > 0 {
-		return nil, fmt.Errorf("failed to load package: %v", pkg.Errors[0])
+	for _, pkgErr := range pkg.Errors {
+		if pkgErr.Kind == packages.ListError || pkgErr.Kind == packages.UnknownError {
+			return nil, fmt.Errorf("failed to load package: %v", pkgErr)
+		}
 	}
 
 	return pkg, nil

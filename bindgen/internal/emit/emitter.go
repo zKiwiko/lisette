@@ -120,6 +120,12 @@ func (e *Emitter) collectMethod(result convert.ConvertResult) bool {
 	return true
 }
 
+func (e *Emitter) EmitUnloadableNote(firstError string) {
+	e.buf.WriteString("// Status: UNLOADABLE — package could not be type-checked on this host\n")
+	fmt.Fprintf(&e.buf, "// First error: %s\n", firstError)
+	e.buf.WriteString("\n")
+}
+
 func (e *Emitter) EmitSkipped(name string, reason *convert.SkipReason) {
 	fmt.Fprintf(&e.buf, "// SKIPPED: %s - %s\n", name, reason.Code)
 	fmt.Fprintf(&e.buf, "// %s\n", reason.Message)

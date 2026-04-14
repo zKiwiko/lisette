@@ -14,6 +14,8 @@ pub fn BadResultReturn() -> Result<Unknown, error>
 
 pub fn BadUnsafeFunc(p: Unknown)
 
+pub fn MakeOpaqueFunc() -> OpaqueFunc
+
 // SKIPPED: SkippedMin - constraint:comparable
 // type constraint T cannot be represented
 
@@ -26,12 +28,18 @@ pub fn UnsafeParam(p: Unknown) -> int
 /// Should skip: function returning unsafe.Pointer
 pub fn UnsafeReturn() -> Unknown
 
+pub fn UseOpaqueFunc(fn_: OpaqueFunc)
+
 pub struct HasUnsafe {
   pub Ptr: Unknown,
 }
 
 /// Nested anonymous structs - tests skip propagation in toLisetteInner
 pub type NestedAnon
+
+// SKIPPED: OpaqueFunc - anonymous-struct
+// anonymous struct types are not supported
+pub type OpaqueFunc
 
 /// Should be skipped: constrained generic (non-any)
 pub type Ordered
@@ -49,6 +57,8 @@ pub struct UnsafeStruct {
   pub Ptr: Unknown,
   pub Val: int,
 }
+
+pub var DefaultOpaqueFunc: OpaqueFunc
 
 impl SafeStruct {
   /// Method on safe struct

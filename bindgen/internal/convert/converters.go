@@ -275,7 +275,7 @@ func (c *Converter) convertType(result *ConvertResult, exp extract.SymbolExport)
 		rhs := alias.Rhs()
 		t := ToLisette(rhs, c)
 		if t.SkipReason != nil {
-			result.SkipReason = t.SkipReason
+			result.SkipReason = withOpaqueType(t.SkipReason)
 			return
 		}
 		result.LisetteType = t.LisetteType
@@ -334,11 +334,19 @@ func (c *Converter) convertType(result *ConvertResult, exp extract.SymbolExport)
 	default:
 		t := ToLisette(underlying, c)
 		if t.SkipReason != nil {
-			result.SkipReason = t.SkipReason
+			result.SkipReason = withOpaqueType(t.SkipReason)
 			return
 		}
 		result.LisetteType = t.LisetteType
 	}
+}
+
+// withOpaqueType clones reason with EmitOpaqueType set, so a skipped top-level
+// type still leaves a `pub type X` placeholder for downstream references.
+func withOpaqueType(reason *SkipReason) *SkipReason {
+	copied := *reason
+	copied.EmitOpaqueType = true
+	return &copied
 }
 
 func (c *Converter) convertConstant(result *ConvertResult, exp extract.SymbolExport) {

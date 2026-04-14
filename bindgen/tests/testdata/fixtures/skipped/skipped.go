@@ -65,3 +65,12 @@ type NestedAnon struct {
 	PtrAnon    *struct{ X int }          // Pointer to skipped type
 	ChanAnon   chan struct{ X int }      // Chan with skipped elem
 }
+
+// Named function type referencing an unrepresentable type; must emit as an
+// opaque `pub type` placeholder so downstream references still bind.
+type OpaqueFunc func(h hasPrivate) hasPrivate
+
+func MakeOpaqueFunc() OpaqueFunc  { return nil }
+func UseOpaqueFunc(fn OpaqueFunc) {}
+
+var DefaultOpaqueFunc OpaqueFunc

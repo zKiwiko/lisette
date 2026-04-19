@@ -17,5 +17,6 @@ func (m Model) String() string {
 
 func (m Model) Init() tea.Cmd {
 	return func() uv.Event {
+		return nil
 	}
 }

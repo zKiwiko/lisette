@@ -938,6 +938,27 @@ pub struct Click { pub x: int }
 }
 
 #[test]
+fn type_switch_guards_then_unguarded_arm_returning_complex_value() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> Option<int> {
+  match e {
+    events.Click { x } if x > 100 => Some(x * 10),
+    events.Click { x } if x > 0 => Some(x),
+    events.Click { x } => Some(-x),
+    _ => None,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
 fn type_switch_four_guarded_arms_same_type() {
     let input = r#"
 import "go:example.com/events"

@@ -1,0 +1,30 @@
+---
+source: tests/spec/emit/patterns.rs
+description: "input: \nimport \"go:example.com/events\"\n\nfn handle(e: events.Event) -> Option<int> {\n  match e {\n    events.Click { x } if x > 100 => Some(x * 10),\n    events.Click { x } if x > 0 => Some(x),\n    events.Click { x } => Some(-x),\n    _ => None,\n  }\n}\n"
+---
+package main
+
+import (
+	"example.com/events"
+	lisette "github.com/ivov/lisette/prelude"
+)
+
+func handle(e events.Event) lisette.Option[int] {
+	switch e := e.(type) {
+	case events.Click:
+		x := e.X
+		if x > 100 {
+			return lisette.MakeOptionSome[int](x * 10)
+		} else {
+			x_2 := e.X
+			if x_2 > 0 {
+				return lisette.MakeOptionSome[int](x_2)
+			} else {
+				x := e.X
+				return lisette.MakeOptionSome[int](-x)
+			}
+		}
+	default:
+		return lisette.MakeOptionNone[int]()
+	}
+}

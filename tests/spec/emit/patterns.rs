@@ -936,3 +936,46 @@ pub struct Click { pub x: int }
 "#;
     assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
 }
+
+#[test]
+fn type_switch_four_guarded_arms_same_type() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x } if x > 1000 => 4,
+    events.Click { x } if x > 100 => 3,
+    events.Click { x } if x > 50 => 2,
+    events.Click { x } if x > 0 => 1,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
+fn type_switch_three_guarded_arms_same_type() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x } if x > 100 => 3,
+    events.Click { x } if x > 50 => 2,
+    events.Click { x } if x > 0 => 1,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}

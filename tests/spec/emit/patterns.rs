@@ -753,3 +753,105 @@ pub struct KeyPress { pub key: string }
 "#;
     assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
 }
+
+#[test]
+fn type_switch_with_field_literal_check() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x: 5 } => 100,
+    events.Click { x } => x,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+pub struct KeyPress { pub key: string }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
+fn or_pattern_on_interface_with_field_literal_in_one_arm() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x: 5 } | events.KeyPress { .. } => 1,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+pub struct KeyPress { pub key: string }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
+fn type_switch_binding_used_in_arm() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x, y } => x * y,
+    events.Scroll { delta } => delta,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int, pub y: int }
+pub struct Scroll { pub delta: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
+fn or_pattern_on_interface_with_bindings_expands_to_separate_arms() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event) -> int {
+  match e {
+    events.Click { x } | events.Scroll { x } => x + 1,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+pub struct Scroll { pub x: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}
+
+#[test]
+fn or_pattern_on_interface_with_guard() {
+    let input = r#"
+import "go:example.com/events"
+
+fn handle(e: events.Event, active: bool) -> int {
+  match e {
+    events.Click { .. } | events.Scroll { .. } if active => 1,
+    _ => 0,
+  }
+}
+"#;
+    let typedef = r#"
+pub interface Event {}
+pub struct Click { pub x: int }
+pub struct Scroll { pub delta: int }
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/events", typedef)]);
+}

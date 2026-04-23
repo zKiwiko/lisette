@@ -1,8 +1,143 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::cell::{OnceCell, RefCell};
-use std::rc::Rc;
+use std::borrow::Borrow;
+use std::cell::OnceCell;
 
 use ecow::EcoString;
+
+/// Dot-qualified identifier for a named type, method, value, or variant.
+///
+/// Wraps the qualified name (`"main.Point.sum"`, `"prelude.Option"`,
+/// `"go:net/http.Handler"`) as a single `EcoString` and exposes structured
+/// accessors. Centralizes the join/split logic that used to live in ad-hoc
+/// `format!("{}.{}", ..)` and `split_once('.')` call sites.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Symbol(EcoString);
+
+impl Symbol {
+    /// Joins a module id and a local (possibly multi-segment) name.
+    ///
+    /// `Symbol::from_parts("main", "Point.sum")` → `"main.Point.sum"`.
+    pub fn from_parts(module: &str, local: &str) -> Self {
+        let mut s = String::with_capacity(module.len() + 1 + local.len());
+        s.push_str(module);
+        s.push('.');
+        s.push_str(local);
+        Self(EcoString::from(s))
+    }
+
+    /// Appends an additional dot-segment to an already-qualified symbol.
+    ///
+    /// `Symbol::from_raw("main.Shape").with_segment("Circle")` →
+    /// `"main.Shape.Circle"`.
+    pub fn with_segment(&self, segment: &str) -> Self {
+        let mut s = String::with_capacity(self.0.len() + 1 + segment.len());
+        s.push_str(&self.0);
+        s.push('.');
+        s.push_str(segment);
+        Self(EcoString::from(s))
+    }
+
+    /// Wraps an already-constructed qualified string. Prefer `from_parts`
+    /// when the module id and local name are available separately.
+    pub fn from_raw(qualified: impl Into<EcoString>) -> Self {
+        Self(qualified.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_eco(&self) -> &EcoString {
+        &self.0
+    }
+
+    /// Last dot-separated segment. `"main.Point.sum"` → `"sum"`.
+    pub fn last_segment(&self) -> &str {
+        self.0.rsplit('.').next().unwrap_or(&self.0)
+    }
+
+    /// Strips the last dot-separated segment. `"main.Point.sum"` → `"main.Point"`.
+    /// Returns `None` if the symbol has no dot.
+    pub fn without_last_segment(&self) -> Option<&str> {
+        self.0.rsplit_once('.').map(|(rest, _)| rest)
+    }
+
+    /// Naive first segment (first dot split). Correct for user modules; for
+    /// `go:net/http.Handler`-style symbols, resolve via
+    /// `Store::module_for_qualified_name` instead.
+    pub fn simple_module_part(&self) -> Option<&str> {
+        self.0.split_once('.').map(|(m, _)| m)
+    }
+}
+
+impl Borrow<str> for Symbol {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Symbol {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Symbol {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&Symbol> for EcoString {
+    fn from(s: &Symbol) -> Self {
+        s.0.clone()
+    }
+}
+
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<EcoString> for Symbol {
+    fn from(s: EcoString) -> Self {
+        Self(s)
+    }
+}
+
+impl From<Symbol> for EcoString {
+    fn from(s: Symbol) -> Self {
+        s.0
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(s: &str) -> Self {
+        Self(EcoString::from(s))
+    }
+}
+
+impl From<String> for Symbol {
+    fn from(s: String) -> Self {
+        Self(EcoString::from(s))
+    }
+}
+
+impl PartialEq<str> for Symbol {
+    fn eq(&self, other: &str) -> bool {
+        self.0.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Symbol {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_str() == *other
+    }
+}
 
 /// Extract the unqualified name from a dot-qualified identifier.
 ///
@@ -20,11 +155,11 @@ pub fn substitute(ty: &Type, map: &HashMap<EcoString, Type>) -> Type {
     }
     match ty {
         Type::Parameter(name) => map.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        Type::Constructor {
+        Type::Nominal {
             id,
             params,
             underlying_ty: underlying,
-        } => Type::Constructor {
+        } => Type::Nominal {
             id: id.clone(),
             params: params.iter().map(|p| substitute(p, map)).collect(),
             underlying_ty: underlying.as_ref().map(|u| Box::new(substitute(u, map))),
@@ -47,7 +182,7 @@ pub fn substitute(ty: &Type, map: &HashMap<EcoString, Type>) -> Type {
                 .collect(),
             return_type: Box::new(substitute(return_type, map)),
         },
-        Type::Variable(_) | Type::Error => ty.clone(),
+        Type::Var { .. } | Type::Error => ty.clone(),
         Type::Forall { vars, body } => {
             let has_overlap = map.keys().any(|k| vars.contains(k));
             let substituted_body = if has_overlap {
@@ -66,61 +201,74 @@ pub fn substitute(ty: &Type, map: &HashMap<EcoString, Type>) -> Type {
             }
         }
         Type::Tuple(elements) => Type::Tuple(elements.iter().map(|e| substitute(e, map)).collect()),
-        Type::Never => ty.clone(),
+        Type::Compound { kind, args } => Type::Compound {
+            kind: *kind,
+            args: args.iter().map(|a| substitute(a, map)).collect(),
+        },
+        Type::Simple(_) | Type::Never | Type::ImportNamespace(_) | Type::ReceiverPlaceholder => {
+            ty.clone()
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Bound {
     pub param_name: EcoString,
     pub generic: Type,
     pub ty: Type,
 }
 
-#[derive(Clone)]
-pub enum TypeVariableState {
-    Unbound { id: i32, hint: Option<EcoString> },
-    Link(Type),
-}
+/// A unique handle identifying a type variable. The binding state (Unbound /
+/// Bound-to-a-Type) lives in a `TypeEnv` owned by the checker; the handle is
+/// a plain id so `Type` stays a pure value (Clone, Eq, Hash, Serialize).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TypeVarId(pub u32);
 
-impl TypeVariableState {
-    pub fn is_unbound(&self) -> bool {
-        matches!(self, TypeVariableState::Unbound { .. })
+impl TypeVarId {
+    pub const IGNORED: TypeVarId = TypeVarId(u32::MAX);
+    pub const UNINFERRED: TypeVarId = TypeVarId(u32::MAX - 1);
+
+    pub fn is_reserved(self) -> bool {
+        self == Self::IGNORED || self == Self::UNINFERRED
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
     }
 }
 
-impl std::fmt::Debug for TypeVariableState {
+impl std::fmt::Debug for TypeVarId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeVariableState::Unbound { id, hint } => match hint {
-                Some(name) => write!(f, "{}", name),
-                None => write!(f, "{}", id),
-            },
-            TypeVariableState::Link(ty) => write!(f, "{:?}", ty),
-        }
-    }
-}
-
-impl PartialEq for TypeVariableState {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                TypeVariableState::Unbound { id: id1, .. },
-                TypeVariableState::Unbound { id: id2, .. },
-            ) => id1 == id2,
-            (TypeVariableState::Link(ty1), TypeVariableState::Link(ty2)) => ty1 == ty2,
-            _ => false,
+        match *self {
+            Self::IGNORED => write!(f, "ignored"),
+            Self::UNINFERRED => write!(f, "uninferred"),
+            TypeVarId(n) => write!(f, "#{}", n),
         }
     }
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Type {
-    Constructor {
-        id: EcoString,
+    Simple(SimpleKind),
+
+    Compound {
+        kind: CompoundKind,
+        args: Vec<Type>,
+    },
+
+    Nominal {
+        id: Symbol,
         params: Vec<Type>,
         underlying_ty: Option<Box<Type>>,
     },
+
+    /// Module namespace handle. Produced by imports (e.g. `import http "net/http"`
+    /// produces an `ImportNamespace("go:net/http")` on the local identifier).
+    /// Dot-access on this type resolves to the module's exports.
+    ImportNamespace(EcoString),
 
     Function {
         params: Vec<Type>,
@@ -129,7 +277,13 @@ pub enum Type {
         return_type: Box<Type>,
     },
 
-    Variable(Rc<RefCell<TypeVariableState>>),
+    /// Type variable handle. Binding state lives in a `TypeEnv` owned by the
+    /// checker; the inline `hint` is display metadata set at allocation time
+    /// so `Display`/`Debug` work without env access.
+    Var {
+        id: TypeVarId,
+        hint: Option<EcoString>,
+    },
 
     Forall {
         vars: Vec<EcoString>,
@@ -145,13 +299,19 @@ pub enum Type {
     /// Poison type returned after an error has been reported.
     /// Unifies with everything silently, preventing cascading diagnostics.
     Error,
+
+    /// Sentinel occupying the `self` slot of an interface method type.
+    /// Unifies silently so an implementing type's receiver does not conflict
+    /// with the abstract method shape. Previously encoded as
+    /// `Constructor { id: "**nominal.__receiver__" }`.
+    ReceiverPlaceholder,
 }
 
 impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Constructor { id, params, .. } => f
-                .debug_struct("Constructor")
+            Type::Nominal { id, params, .. } => f
+                .debug_struct("Nominal")
                 .field("id", id)
                 .field("params", params)
                 .finish(),
@@ -170,10 +330,14 @@ impl std::fmt::Debug for Type {
                     .field("return_type", return_type)
                     .finish()
             }
-            Type::Variable(type_var) => f
-                .debug_tuple("Variable")
-                .field(&*type_var.borrow())
-                .finish(),
+            Type::Var { id, hint } => {
+                let mut s = f.debug_struct("Var");
+                s.field("id", id);
+                if let Some(h) = hint {
+                    s.field("hint", h);
+                }
+                s.finish()
+            }
             Type::Forall { vars, body } => f
                 .debug_struct("Forall")
                 .field("vars", vars)
@@ -183,6 +347,16 @@ impl std::fmt::Debug for Type {
             Type::Never => write!(f, "Never"),
             Type::Tuple(elements) => f.debug_tuple("Tuple").field(elements).finish(),
             Type::Error => write!(f, "Error"),
+            Type::ImportNamespace(module_id) => {
+                f.debug_tuple("ImportNamespace").field(module_id).finish()
+            }
+            Type::ReceiverPlaceholder => write!(f, "ReceiverPlaceholder"),
+            Type::Simple(kind) => f.debug_tuple("Simple").field(kind).finish(),
+            Type::Compound { kind, args } => f
+                .debug_struct("Compound")
+                .field("kind", kind)
+                .field("args", args)
+                .finish(),
         }
     }
 }
@@ -191,12 +365,12 @@ impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Type::Constructor {
+                Type::Nominal {
                     id: id1,
                     params: params1,
                     ..
                 },
-                Type::Constructor {
+                Type::Nominal {
                     id: id2,
                     params: params2,
                     ..
@@ -216,9 +390,7 @@ impl PartialEq for Type {
                     return_type: r2,
                 },
             ) => p1 == p2 && m1 == m2 && b1 == b2 && r1 == r2,
-            (Type::Variable(v1), Type::Variable(v2)) => {
-                Rc::ptr_eq(v1, v2) || *v1.borrow() == *v2.borrow()
-            }
+            (Type::Var { id: id1, .. }, Type::Var { id: id2, .. }) => id1 == id2,
             (
                 Type::Forall {
                     vars: vars1,
@@ -232,6 +404,12 @@ impl PartialEq for Type {
             (Type::Parameter(name1), Type::Parameter(name2)) => name1 == name2,
             (Type::Never, Type::Never) => true,
             (Type::Tuple(elems1), Type::Tuple(elems2)) => elems1 == elems2,
+            (Type::ImportNamespace(m1), Type::ImportNamespace(m2)) => m1 == m2,
+            (Type::ReceiverPlaceholder, Type::ReceiverPlaceholder) => true,
+            (Type::Simple(k1), Type::Simple(k2)) => k1 == k2,
+            (Type::Compound { kind: k1, args: a1 }, Type::Compound { kind: k2, args: a2 }) => {
+                k1 == k2 && a1 == a2
+            }
             _ => false,
         }
     }
@@ -248,94 +426,254 @@ thread_local! {
 }
 
 impl Type {
+    pub fn simple(kind: SimpleKind) -> Type {
+        Self::Simple(kind)
+    }
+
+    pub fn compound(kind: CompoundKind, args: Vec<Type>) -> Type {
+        Self::Compound { kind, args }
+    }
+
     pub fn int() -> Type {
-        INTERNED_INT.with(|cell| cell.get_or_init(|| Self::nominal("int")).clone())
+        INTERNED_INT.with(|cell| cell.get_or_init(|| Self::simple(SimpleKind::Int)).clone())
     }
 
     pub fn string() -> Type {
-        INTERNED_STRING.with(|cell| cell.get_or_init(|| Self::nominal("string")).clone())
+        INTERNED_STRING.with(|cell| {
+            cell.get_or_init(|| Self::simple(SimpleKind::String))
+                .clone()
+        })
     }
 
     pub fn bool() -> Type {
-        INTERNED_BOOL.with(|cell| cell.get_or_init(|| Self::nominal("bool")).clone())
+        INTERNED_BOOL.with(|cell| cell.get_or_init(|| Self::simple(SimpleKind::Bool)).clone())
     }
 
     pub fn unit() -> Type {
-        INTERNED_UNIT.with(|cell| cell.get_or_init(|| Self::nominal("Unit")).clone())
+        INTERNED_UNIT.with(|cell| cell.get_or_init(|| Self::simple(SimpleKind::Unit)).clone())
     }
 
     pub fn float64() -> Type {
-        INTERNED_FLOAT64.with(|cell| cell.get_or_init(|| Self::nominal("float64")).clone())
+        INTERNED_FLOAT64.with(|cell| {
+            cell.get_or_init(|| Self::simple(SimpleKind::Float64))
+                .clone()
+        })
     }
 
     pub fn rune() -> Type {
-        INTERNED_RUNE.with(|cell| cell.get_or_init(|| Self::nominal("rune")).clone())
+        INTERNED_RUNE.with(|cell| cell.get_or_init(|| Self::simple(SimpleKind::Rune)).clone())
     }
 
     pub fn byte() -> Type {
-        INTERNED_BYTE.with(|cell| cell.get_or_init(|| Self::nominal("byte")).clone())
+        INTERNED_BYTE.with(|cell| cell.get_or_init(|| Self::simple(SimpleKind::Byte)).clone())
     }
 }
 
 impl Type {
-    const UNINFERRED_ID: i32 = -1;
-    const IGNORED_ID: i32 = -333;
-
-    pub fn nominal(name: &str) -> Self {
-        Self::Constructor {
-            id: format!("**nominal.{}", name).into(),
-            params: vec![],
-            underlying_ty: None,
+    pub fn uninferred() -> Self {
+        Self::Var {
+            id: TypeVarId::UNINFERRED,
+            hint: None,
         }
     }
 
-    pub fn uninferred() -> Self {
-        Self::Variable(Rc::new(RefCell::new(TypeVariableState::Unbound {
-            id: Self::UNINFERRED_ID,
-            hint: None,
-        })))
-    }
-
     pub fn ignored() -> Self {
-        Self::Variable(Rc::new(RefCell::new(TypeVariableState::Unbound {
-            id: Self::IGNORED_ID,
+        Self::Var {
+            id: TypeVarId::IGNORED,
             hint: None,
-        })))
+        }
     }
 
     pub fn get_type_params(&self) -> Option<&[Type]> {
         match self {
-            Type::Constructor { params, .. } => Some(params),
+            Type::Nominal { params, .. } => Some(params),
+            Type::Compound { args, .. } => Some(args),
             _ => None,
         }
     }
 }
 
-const ARITHMETIC_TYPES: &[&str] = &[
-    "byte",
-    "complex128",
-    "complex64",
-    "float32",
-    "float64",
-    "int",
-    "int16",
-    "int32",
-    "int64",
-    "int8",
-    "rune",
-    "uint",
-    "uint16",
-    "uint32",
-    "uint64",
-    "uint8",
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericFamily {
+    SignedInt,
+    UnsignedInt,
+    Float,
+}
 
-const ORDERED_TYPES: &[&str] = &[
-    "byte", "float32", "float64", "int", "int16", "int32", "int64", "int8", "rune", "uint",
-    "uint16", "uint32", "uint64", "uint8",
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum CompoundKind {
+    Ref,
+    Slice,
+    EnumeratedSlice,
+    Map,
+    Channel,
+    Sender,
+    Receiver,
+    VarArgs,
+}
 
-const UNSIGNED_INT_TYPES: &[&str] = &["byte", "uint", "uint8", "uint16", "uint32", "uint64"];
+impl CompoundKind {
+    pub fn leaf_name(self) -> &'static str {
+        match self {
+            CompoundKind::Ref => "Ref",
+            CompoundKind::Slice => "Slice",
+            CompoundKind::EnumeratedSlice => "EnumeratedSlice",
+            CompoundKind::Map => "Map",
+            CompoundKind::Channel => "Channel",
+            CompoundKind::Sender => "Sender",
+            CompoundKind::Receiver => "Receiver",
+            CompoundKind::VarArgs => "VarArgs",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<CompoundKind> {
+        Some(match name {
+            "Ref" => CompoundKind::Ref,
+            "Slice" => CompoundKind::Slice,
+            "EnumeratedSlice" => CompoundKind::EnumeratedSlice,
+            "Map" => CompoundKind::Map,
+            "Channel" => CompoundKind::Channel,
+            "Sender" => CompoundKind::Sender,
+            "Receiver" => CompoundKind::Receiver,
+            "VarArgs" => CompoundKind::VarArgs,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SimpleKind {
+    Int,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Uintptr,
+    Byte,
+    Float32,
+    Float64,
+    Complex64,
+    Complex128,
+    Rune,
+    Bool,
+    String,
+    Unit,
+}
+
+impl SimpleKind {
+    pub fn leaf_name(self) -> &'static str {
+        match self {
+            SimpleKind::Int => "int",
+            SimpleKind::Int8 => "int8",
+            SimpleKind::Int16 => "int16",
+            SimpleKind::Int32 => "int32",
+            SimpleKind::Int64 => "int64",
+            SimpleKind::Uint => "uint",
+            SimpleKind::Uint8 => "uint8",
+            SimpleKind::Uint16 => "uint16",
+            SimpleKind::Uint32 => "uint32",
+            SimpleKind::Uint64 => "uint64",
+            SimpleKind::Uintptr => "uintptr",
+            SimpleKind::Byte => "byte",
+            SimpleKind::Float32 => "float32",
+            SimpleKind::Float64 => "float64",
+            SimpleKind::Complex64 => "complex64",
+            SimpleKind::Complex128 => "complex128",
+            SimpleKind::Rune => "rune",
+            SimpleKind::Bool => "bool",
+            SimpleKind::String => "string",
+            SimpleKind::Unit => "Unit",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<SimpleKind> {
+        Some(match name {
+            "int" => SimpleKind::Int,
+            "int8" => SimpleKind::Int8,
+            "int16" => SimpleKind::Int16,
+            "int32" => SimpleKind::Int32,
+            "int64" => SimpleKind::Int64,
+            "uint" => SimpleKind::Uint,
+            "uint8" => SimpleKind::Uint8,
+            "uint16" => SimpleKind::Uint16,
+            "uint32" => SimpleKind::Uint32,
+            "uint64" => SimpleKind::Uint64,
+            "uintptr" => SimpleKind::Uintptr,
+            "byte" => SimpleKind::Byte,
+            "float32" => SimpleKind::Float32,
+            "float64" => SimpleKind::Float64,
+            "complex64" => SimpleKind::Complex64,
+            "complex128" => SimpleKind::Complex128,
+            "rune" => SimpleKind::Rune,
+            "bool" => SimpleKind::Bool,
+            "string" => SimpleKind::String,
+            "Unit" => SimpleKind::Unit,
+            _ => return None,
+        })
+    }
+
+    pub fn is_arithmetic(self) -> bool {
+        !matches!(
+            self,
+            SimpleKind::Bool | SimpleKind::String | SimpleKind::Unit | SimpleKind::Uintptr
+        )
+    }
+
+    pub fn is_ordered(self) -> bool {
+        self.is_arithmetic() && !matches!(self, SimpleKind::Complex64 | SimpleKind::Complex128)
+    }
+
+    pub fn is_unsigned_int(self) -> bool {
+        matches!(
+            self,
+            SimpleKind::Byte
+                | SimpleKind::Uint
+                | SimpleKind::Uint8
+                | SimpleKind::Uint16
+                | SimpleKind::Uint32
+                | SimpleKind::Uint64
+        )
+    }
+
+    pub fn is_signed_int(self) -> bool {
+        matches!(
+            self,
+            SimpleKind::Int
+                | SimpleKind::Int8
+                | SimpleKind::Int16
+                | SimpleKind::Int32
+                | SimpleKind::Int64
+                | SimpleKind::Rune
+        )
+    }
+
+    pub fn is_float(self) -> bool {
+        matches!(self, SimpleKind::Float32 | SimpleKind::Float64)
+    }
+
+    pub fn is_complex(self) -> bool {
+        matches!(self, SimpleKind::Complex64 | SimpleKind::Complex128)
+    }
+
+    pub fn numeric_family(self) -> Option<NumericFamily> {
+        if self.is_signed_int() {
+            Some(NumericFamily::SignedInt)
+        } else if self.is_unsigned_int() {
+            Some(NumericFamily::UnsignedInt)
+        } else if self.is_float() {
+            Some(NumericFamily::Float)
+        } else {
+            None
+        }
+    }
+}
 
 impl Type {
     pub fn get_function_ret(&self) -> Option<&Type> {
@@ -347,21 +685,23 @@ impl Type {
 
     pub fn has_name(&self, name: &str) -> bool {
         match self {
-            Type::Constructor { id, .. } => unqualified_name(id) == name,
+            Type::Nominal { id, .. } => id.last_segment() == name,
+            Type::Simple(kind) => kind.leaf_name() == name,
+            Type::Compound { kind, .. } => kind.leaf_name() == name,
             _ => false,
         }
     }
 
     pub fn get_qualified_id(&self) -> Option<&str> {
         match self {
-            Type::Constructor { id, .. } => Some(id.as_str()),
+            Type::Nominal { id, .. } => Some(id.as_str()),
             _ => None,
         }
     }
 
     pub fn get_underlying(&self) -> Option<&Type> {
         match self {
-            Type::Constructor {
+            Type::Nominal {
                 underlying_ty: underlying,
                 ..
             } => underlying.as_deref(),
@@ -382,11 +722,11 @@ impl Type {
     }
 
     fn has_qualified_id(&self, qualified_id: &str) -> bool {
-        matches!(self, Type::Constructor { id, .. } if id.as_str() == qualified_id)
+        matches!(self, Type::Nominal { id, .. } if id.as_str() == qualified_id)
     }
 
     pub fn is_unit(&self) -> bool {
-        matches!(self.resolve(), Type::Constructor { ref id, .. } if id.as_ref() == "**nominal.Unit")
+        self.is_simple(SimpleKind::Unit)
     }
 
     pub fn tuple_arity(&self) -> Option<usize> {
@@ -400,12 +740,45 @@ impl Type {
         matches!(self, Type::Tuple(_))
     }
 
+    pub fn as_import_namespace(&self) -> Option<&str> {
+        match self {
+            Type::ImportNamespace(module_id) => Some(module_id),
+            _ => None,
+        }
+    }
+
+    pub fn as_compound(&self) -> Option<(CompoundKind, &[Type])> {
+        match self {
+            Type::Compound { kind, args } => Some((*kind, args.as_slice())),
+            Type::Nominal { id, params, .. } => {
+                CompoundKind::from_name(id.last_segment()).map(|k| (k, params.as_slice()))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_native(&self, kind: CompoundKind) -> bool {
+        self.as_compound().is_some_and(|(k, _)| k == kind)
+    }
+
     pub fn is_ref(&self) -> bool {
-        self.has_name("Ref")
+        self.is_native(CompoundKind::Ref)
+    }
+
+    pub fn is_slice(&self) -> bool {
+        self.is_native(CompoundKind::Slice)
+    }
+
+    pub fn is_map(&self) -> bool {
+        self.is_native(CompoundKind::Map)
+    }
+
+    pub fn is_channel(&self) -> bool {
+        self.is_native(CompoundKind::Channel)
     }
 
     pub fn is_receiver_placeholder(&self) -> bool {
-        self.has_name("__receiver__")
+        matches!(self, Type::ReceiverPlaceholder)
     }
 
     pub fn is_unknown(&self) -> bool {
@@ -413,51 +786,45 @@ impl Type {
     }
 
     pub fn is_receiver(&self) -> bool {
-        self.has_name("Receiver")
+        self.is_native(CompoundKind::Receiver)
     }
 
     pub fn is_ignored(&self) -> bool {
-        match self {
-            Type::Variable(var) => {
-                matches!(&*var.borrow(), TypeVariableState::Unbound { id, .. } if *id == Self::IGNORED_ID)
-            }
+        matches!(self, Type::Var { id, .. } if *id == TypeVarId::IGNORED)
+    }
+
+    pub fn is_variadic(&self) -> Option<Type> {
+        let last = self.get_function_params()?.last()?;
+        match last.as_compound()? {
+            (CompoundKind::VarArgs, _) => last.inner(),
+            _ => None,
+        }
+    }
+
+    pub fn is_string(&self) -> bool {
+        self.is_simple(SimpleKind::String)
+    }
+
+    pub fn is_slice_of_simple(&self, element: SimpleKind) -> bool {
+        match self.as_compound() {
+            Some((CompoundKind::Slice, [elem])) => elem.is_simple(element),
             _ => false,
         }
     }
 
-    pub fn is_variadic(&self) -> Option<Type> {
-        let args = self.get_function_params()?;
-        let last = args.last()?;
-
-        if last.get_name()? == "VarArgs" {
-            return last.inner();
-        }
-
-        None
-    }
-
-    pub fn is_string(&self) -> bool {
-        self.has_name("string")
-    }
-
     pub fn is_slice_of(&self, element_name: &str) -> bool {
-        match self {
-            Type::Constructor { id, params, .. } => {
-                if unqualified_name(id) != "Slice" || params.len() != 1 {
-                    return false;
-                }
-                params[0].resolve().has_name(element_name)
-            }
+        match self.as_compound() {
+            Some((CompoundKind::Slice, [elem])) => elem.has_name(element_name),
             _ => false,
         }
     }
 
     pub fn is_byte_slice(&self) -> bool {
-        self.is_slice_of("byte") || self.is_slice_of("uint8")
+        self.is_slice_of_simple(SimpleKind::Byte) || self.is_slice_of_simple(SimpleKind::Uint8)
     }
 
     pub fn is_rune_slice(&self) -> bool {
-        self.is_slice_of("rune")
+        self.is_slice_of_simple(SimpleKind::Rune)
     }
 
     pub fn is_byte_or_rune_slice(&self) -> bool {
@@ -469,86 +836,81 @@ impl Type {
             return true;
         }
         match self {
-            Type::Constructor { underlying_ty, .. } => underlying_ty
+            Type::Nominal { underlying_ty, .. } => underlying_ty
                 .as_deref()
                 .is_some_and(|u| u.has_byte_or_rune_slice_underlying()),
             _ => false,
         }
     }
 
+    pub fn as_simple(&self) -> Option<SimpleKind> {
+        match self {
+            Type::Simple(kind) => Some(*kind),
+            Type::Nominal { id, .. } => SimpleKind::from_name(id.last_segment()),
+            _ => None,
+        }
+    }
+
+    pub fn is_simple(&self, kind: SimpleKind) -> bool {
+        self.as_simple() == Some(kind)
+    }
+
     pub fn is_boolean(&self) -> bool {
-        self.has_name("bool")
+        self.is_simple(SimpleKind::Bool)
     }
 
     pub fn is_rune(&self) -> bool {
-        self.has_name("rune")
+        self.is_simple(SimpleKind::Rune)
     }
 
     pub fn is_float64(&self) -> bool {
-        self.has_name("float64")
+        self.is_simple(SimpleKind::Float64)
     }
 
     pub fn is_float32(&self) -> bool {
-        self.has_name("float32")
+        self.is_simple(SimpleKind::Float32)
     }
 
     pub fn is_float(&self) -> bool {
-        self.is_float64() || self.is_float32()
+        self.as_simple().is_some_and(SimpleKind::is_float)
     }
 
     pub fn is_variable(&self) -> bool {
-        matches!(self, Type::Variable(_))
+        matches!(self, Type::Var { .. })
     }
 
-    pub fn is_unbound_variable(&self) -> bool {
-        matches!(self, Type::Variable(cell) if cell.borrow().is_unbound())
+    pub fn is_type_var(&self) -> bool {
+        matches!(self, Type::Var { .. })
     }
 
     pub fn is_numeric(&self) -> bool {
-        match self {
-            Type::Constructor { id, .. } => ARITHMETIC_TYPES.contains(&unqualified_name(id)),
-            _ => false,
-        }
+        self.as_simple().is_some_and(SimpleKind::is_arithmetic)
     }
 
     pub fn is_ordered(&self) -> bool {
-        match self {
-            Type::Constructor { id, .. } => ORDERED_TYPES.contains(&unqualified_name(id)),
-            _ => false,
-        }
+        self.as_simple().is_some_and(SimpleKind::is_ordered)
     }
 
     pub fn is_complex(&self) -> bool {
-        match self {
-            Type::Constructor { id, .. } => {
-                matches!(unqualified_name(id), "complex128" | "complex64")
-            }
-            _ => false,
-        }
+        self.as_simple().is_some_and(SimpleKind::is_complex)
     }
 
     pub fn is_unsigned_int(&self) -> bool {
-        match self {
-            Type::Constructor { id, .. } => UNSIGNED_INT_TYPES.contains(&unqualified_name(id)),
-            _ => false,
-        }
+        self.as_simple().is_some_and(SimpleKind::is_unsigned_int)
     }
 
     pub fn is_never(&self) -> bool {
-        matches!(self.shallow_resolve(), Type::Never)
+        matches!(self, Type::Never)
     }
 
     pub fn is_error(&self) -> bool {
-        matches!(self.shallow_resolve(), Type::Error)
+        matches!(self, Type::Error)
     }
 
     pub fn has_unbound_variables(&self) -> bool {
         match self {
-            Type::Variable(type_var) => match &*type_var.borrow() {
-                TypeVariableState::Unbound { hint, .. } => hint.is_some(),
-                TypeVariableState::Link(ty) => ty.has_unbound_variables(),
-            },
-            Type::Constructor { params, .. } => params.iter().any(|p| p.has_unbound_variables()),
+            Type::Var { hint, .. } => hint.is_some(),
+            Type::Nominal { params, .. } => params.iter().any(|p| p.has_unbound_variables()),
             Type::Function {
                 params,
                 return_type,
@@ -559,7 +921,13 @@ impl Type {
             }
             Type::Forall { body, .. } => body.has_unbound_variables(),
             Type::Tuple(elements) => elements.iter().any(|e| e.has_unbound_variables()),
-            Type::Parameter(_) | Type::Never | Type::Error => false,
+            Type::Compound { args, .. } => args.iter().any(|a| a.has_unbound_variables()),
+            Type::Simple(_)
+            | Type::Parameter(_)
+            | Type::Never
+            | Type::Error
+            | Type::ImportNamespace(_)
+            | Type::ReceiverPlaceholder => false,
         }
     }
 
@@ -569,8 +937,8 @@ impl Type {
         }
 
         match self {
-            Type::Constructor { id, params, .. } => {
-                names.remove(unqualified_name(id));
+            Type::Nominal { id, params, .. } => {
+                names.remove(id.last_segment());
                 for param in params {
                     param.remove_found_type_names(names);
                 }
@@ -593,11 +961,7 @@ impl Type {
             Type::Forall { body, .. } => {
                 body.remove_found_type_names(names);
             }
-            Type::Variable(type_var) => {
-                if let TypeVariableState::Link(ty) = &*type_var.borrow() {
-                    ty.remove_found_type_names(names);
-                }
-            }
+            Type::Var { .. } => {}
             Type::Parameter(name) => {
                 names.remove(name);
             }
@@ -606,7 +970,16 @@ impl Type {
                     element.remove_found_type_names(names);
                 }
             }
-            Type::Never | Type::Error => {}
+            Type::Compound { kind, args } => {
+                names.remove(kind.leaf_name());
+                for arg in args {
+                    arg.remove_found_type_names(names);
+                }
+            }
+            Type::Simple(kind) => {
+                names.remove(kind.leaf_name());
+            }
+            Type::Never | Type::Error | Type::ImportNamespace(_) | Type::ReceiverPlaceholder => {}
         }
     }
 }
@@ -614,16 +987,21 @@ impl Type {
 impl Type {
     pub fn get_name(&self) -> Option<&str> {
         match self {
-            Type::Constructor { id, params, .. } => {
-                let name = unqualified_name(id);
-                if name == "Ref" {
+            Type::Simple(kind) => Some(kind.leaf_name()),
+            Type::Compound { kind, args } => match kind {
+                CompoundKind::Ref => args.first().and_then(|inner| inner.get_name()),
+                _ => Some(kind.leaf_name()),
+            },
+            Type::Nominal { id, params, .. } => {
+                let name = id.last_segment();
+                if CompoundKind::from_name(name) == Some(CompoundKind::Ref) {
                     return params.first().and_then(|inner| inner.get_name());
                 }
-                if let Some(module_path) = id.strip_prefix("@import/") {
-                    let path = module_path.strip_prefix("go:").unwrap_or(module_path);
-                    return path.rsplit('/').next();
-                }
                 Some(name)
+            }
+            Type::ImportNamespace(module_id) => {
+                let path = module_id.strip_prefix("go:").unwrap_or(module_id);
+                path.rsplit('/').next()
             }
             _ => None,
         }
@@ -640,7 +1018,7 @@ impl Type {
     pub fn get_function_params(&self) -> Option<&[Type]> {
         match self {
             Type::Function { params, .. } => Some(params),
-            Type::Constructor {
+            Type::Nominal {
                 underlying_ty: Some(inner),
                 ..
             } => inner.get_function_params(),
@@ -700,9 +1078,11 @@ impl Type {
         }
     }
 
-    pub fn get_qualified_name(&self) -> EcoString {
+    pub fn get_qualified_name(&self) -> Symbol {
         match self.strip_refs() {
-            Type::Constructor { id, .. } => id,
+            Type::Nominal { id, .. } => id,
+            Type::Simple(kind) => Symbol::from_parts("prelude", kind.leaf_name()),
+            Type::Compound { kind, .. } => Symbol::from_parts("prelude", kind.leaf_name()),
             _ => panic!("called get_qualified_name on {:#?}", self),
         }
     }
@@ -756,7 +1136,7 @@ impl Type {
                 bounds,
                 return_type,
             } => {
-                let mut new_params = vec![Type::nominal("__receiver__")];
+                let mut new_params = vec![Type::ReceiverPlaceholder];
                 new_params.extend(params);
 
                 let mut new_mutability = vec![false];
@@ -786,13 +1166,13 @@ impl Type {
         (types, vars.into_values().collect())
     }
 
-    fn remove_vars_impl(ty: &Type, vars: &mut HashMap<i32, EcoString>) -> Type {
+    fn remove_vars_impl(ty: &Type, vars: &mut HashMap<u32, EcoString>) -> Type {
         match ty {
-            Type::Constructor {
+            Type::Nominal {
                 id: name,
                 params: args,
                 underlying_ty: underlying,
-            } => Type::Constructor {
+            } => Type::Nominal {
                 id: name.clone(),
                 params: args
                     .iter()
@@ -825,28 +1205,25 @@ impl Type {
                 return_type: Self::remove_vars_impl(return_type, vars).into(),
             },
 
-            Type::Variable(type_var) => match &*type_var.borrow() {
-                TypeVariableState::Unbound { id, hint } => match vars.get(id) {
-                    Some(g) => Self::nominal(g),
-                    None => {
-                        let name: EcoString = hint.clone().unwrap_or_else(|| {
-                            char::from_digit(
-                                (vars.len() + 10)
-                                    .try_into()
-                                    .expect("type var count fits in u32"),
-                                16,
-                            )
-                            .expect("type var index is valid hex digit")
-                            .to_uppercase()
-                            .to_string()
-                            .into()
-                        });
+            Type::Var { id, hint } => match vars.get(&id.0) {
+                Some(g) => Type::Parameter(g.clone()),
+                None => {
+                    let name: EcoString = hint.clone().unwrap_or_else(|| {
+                        char::from_digit(
+                            (vars.len() + 10)
+                                .try_into()
+                                .expect("type var count fits in u32"),
+                            16,
+                        )
+                        .expect("type var index is valid hex digit")
+                        .to_uppercase()
+                        .to_string()
+                        .into()
+                    });
 
-                        vars.insert(*id, name.clone());
-                        Self::nominal(&name)
-                    }
-                },
-                TypeVariableState::Link(ty) => Self::remove_vars_impl(ty, vars),
+                    vars.insert(id.0, name.clone());
+                    Type::Parameter(name)
+                }
             },
 
             Type::Forall { body, .. } => Self::remove_vars_impl(body, vars),
@@ -856,8 +1233,17 @@ impl Type {
                     .map(|e| Self::remove_vars_impl(e, vars))
                     .collect(),
             ),
-            Type::Parameter(name) => Type::Parameter(name.clone()),
-            Type::Never | Type::Error => ty.clone(),
+            Type::Compound { kind, args } => Type::Compound {
+                kind: *kind,
+                args: args
+                    .iter()
+                    .map(|a| Self::remove_vars_impl(a, vars))
+                    .collect(),
+            },
+            Type::Simple(_) | Type::Parameter(_) => ty.clone(),
+            Type::Never | Type::Error | Type::ImportNamespace(_) | Type::ReceiverPlaceholder => {
+                ty.clone()
+            }
         }
     }
 
@@ -866,7 +1252,7 @@ impl Type {
             return true;
         }
         match self {
-            Type::Constructor { params, .. } => params.iter().any(|p| p.contains_type(target)),
+            Type::Nominal { params, .. } => params.iter().any(|p| p.contains_type(target)),
             Type::Function {
                 params,
                 return_type,
@@ -874,93 +1260,19 @@ impl Type {
             } => {
                 params.iter().any(|p| p.contains_type(target)) || return_type.contains_type(target)
             }
-            Type::Variable(var) => {
-                if let TypeVariableState::Link(linked) = &*var.borrow() {
-                    linked.contains_type(target)
-                } else {
-                    false
-                }
-            }
+            Type::Var { .. } => false,
             Type::Forall { body, .. } => body.contains_type(target),
             Type::Tuple(elements) => elements.iter().any(|e| e.contains_type(target)),
-            Type::Parameter(_) | Type::Never | Type::Error => false,
-        }
-    }
-
-    /// Follow Variable::Link chains to the outermost non-variable type.
-    /// Does NOT recurse into Constructor params, Function params, etc.
-    /// Use this when you only need the outermost type (e.g. is_never, is_unknown, has_name).
-    pub fn shallow_resolve(&self) -> Type {
-        match self {
-            Type::Variable(type_var) => {
-                let state = type_var.borrow();
-                match &*state {
-                    TypeVariableState::Unbound { .. } => self.clone(),
-                    TypeVariableState::Link(linked) => linked.shallow_resolve(),
-                }
-            }
-            _ => self.clone(),
-        }
-    }
-
-    pub fn resolve(&self) -> Type {
-        match self {
-            Type::Variable(type_var) => {
-                let state = type_var.borrow();
-                match &*state {
-                    TypeVariableState::Unbound { .. } => self.clone(),
-                    TypeVariableState::Link(linked) => {
-                        let resolved = linked.resolve();
-                        drop(state);
-                        *type_var.borrow_mut() = TypeVariableState::Link(resolved.clone());
-                        resolved
-                    }
-                }
-            }
-            Type::Constructor {
-                id,
-                params,
-                underlying_ty: underlying,
-            } => Type::Constructor {
-                id: id.clone(),
-                params: params.iter().map(|p| p.resolve()).collect(),
-                underlying_ty: underlying.as_ref().map(|u| Box::new(u.resolve())),
-            },
-            Type::Function {
-                params,
-                param_mutability,
-                bounds,
-                return_type,
-            } => Type::Function {
-                params: params.iter().map(|p| p.resolve()).collect(),
-                param_mutability: param_mutability.clone(),
-                bounds: bounds
-                    .iter()
-                    .map(|b| Bound {
-                        param_name: b.param_name.clone(),
-                        generic: b.generic.resolve(),
-                        ty: b.ty.resolve(),
-                    })
-                    .collect(),
-                return_type: Box::new(return_type.resolve()),
-            },
-            Type::Forall { body, .. } => body.resolve(),
-            Type::Tuple(elements) => Type::Tuple(elements.iter().map(|e| e.resolve()).collect()),
-            Type::Parameter(_) | Type::Error => self.clone(),
-            Type::Never => Type::Never,
+            Type::Compound { args, .. } => args.iter().any(|a| a.contains_type(target)),
+            Type::Simple(_)
+            | Type::Parameter(_)
+            | Type::Never
+            | Type::Error
+            | Type::ImportNamespace(_)
+            | Type::ReceiverPlaceholder => false,
         }
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericFamily {
-    SignedInt,
-    UnsignedInt,
-    Float,
-}
-
-const SIGNED_INT_TYPES: &[&str] = &["int", "int8", "int16", "int32", "int64", "rune"];
-const FLOAT_TYPES: &[&str] = &["float32", "float64"];
 
 impl Type {
     pub fn underlying_numeric_type(&self) -> Option<Type> {
@@ -971,9 +1283,10 @@ impl Type {
         self.underlying_numeric_type().is_some()
     }
 
-    fn underlying_numeric_type_recursive(&self, visited: &mut HashSet<EcoString>) -> Option<Type> {
+    fn underlying_numeric_type_recursive(&self, visited: &mut HashSet<Symbol>) -> Option<Type> {
         match self {
-            Type::Constructor {
+            Type::Simple(_) if self.is_numeric() => Some(self.clone()),
+            Type::Nominal {
                 id,
                 underlying_ty: underlying,
                 ..
@@ -995,20 +1308,7 @@ impl Type {
     }
 
     pub fn numeric_family(&self) -> Option<NumericFamily> {
-        let name = match self {
-            Type::Constructor { id, .. } => unqualified_name(id),
-            _ => return None,
-        };
-
-        if SIGNED_INT_TYPES.contains(&name) {
-            Some(NumericFamily::SignedInt)
-        } else if UNSIGNED_INT_TYPES.contains(&name) {
-            Some(NumericFamily::UnsignedInt)
-        } else if FLOAT_TYPES.contains(&name) {
-            Some(NumericFamily::Float)
-        } else {
-            None
-        }
+        self.as_simple()?.numeric_family()
     }
 
     pub fn is_numeric_compatible_with(&self, other: &Type) -> bool {
@@ -1023,7 +1323,7 @@ impl Type {
 
     pub fn is_aliased_numeric_type(&self) -> bool {
         match self {
-            Type::Constructor { underlying_ty, .. } => {
+            Type::Nominal { underlying_ty, .. } => {
                 underlying_ty.is_some() && !self.is_numeric() && self.has_underlying_numeric_type()
             }
             _ => false,

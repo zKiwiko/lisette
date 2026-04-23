@@ -6,7 +6,7 @@ use syntax::ast::{
 };
 use syntax::program::File;
 use syntax::program::{Definition, Module};
-use syntax::types::Type;
+use syntax::types::{Symbol, Type};
 
 use super::reference_graph::{EnumVariantId, ModuleItemId, ReferenceGraph, StructFieldId};
 
@@ -37,7 +37,7 @@ impl AliasMap {
     }
 
     fn resolve(&self, module: &Module, name: &str) -> Option<ModuleItemId> {
-        let qualified_name = format!("{}.{}", module.id, name);
+        let qualified_name = Symbol::from_parts(&module.id, name);
         if module.definitions.contains_key(qualified_name.as_str()) {
             return Some(ModuleItemId::new(&module.id, name));
         }
@@ -428,7 +428,7 @@ fn walk_struct_call(
         if let Some(ty_name) = type_name(&spread_expression.get_type()) {
             let explicit: HashSet<&str> =
                 field_assignments.iter().map(|f| f.name.as_str()).collect();
-            let qname = format!("{}.{}", module.id, ty_name);
+            let qname = Symbol::from_parts(&module.id, &ty_name);
             if let Some(Definition::Struct { fields, .. }) = module.definitions.get(qname.as_str())
             {
                 for field in fields {
@@ -620,7 +620,7 @@ fn walk_type(
     from: &ModuleItemId,
 ) {
     match ty {
-        Type::Constructor { id, params, .. } => {
+        Type::Nominal { id, params, .. } => {
             // Type IDs from the current module are stored qualified (e.g. "_entry_.Greeter").
             // Strip the module prefix so extract_base_name sees the local name, not the
             // module id — otherwise "module.Type" is misread as "import_alias.Type" and
@@ -651,7 +651,18 @@ fn walk_type(
                 walk_type(module, e, graph, alias_map, from);
             }
         }
-        Type::Variable(_) | Type::Parameter(_) | Type::Never | Type::Error => {}
+        Type::Compound { args, .. } => {
+            for a in args {
+                walk_type(module, a, graph, alias_map, from);
+            }
+        }
+        Type::Simple(_)
+        | Type::Var { .. }
+        | Type::Parameter(_)
+        | Type::Never
+        | Type::Error
+        | Type::ImportNamespace(_)
+        | Type::ReceiverPlaceholder => {}
     }
 }
 
@@ -670,12 +681,12 @@ fn add_ref(
 }
 
 fn type_name(ty: &Type) -> Option<String> {
-    let mut current = ty.resolve().strip_refs();
+    let mut current = ty.strip_refs();
     while let Some(next) = current.get_underlying().cloned() {
         current = next;
     }
     match current {
-        Type::Constructor { id, .. } => id.split('.').next_back().map(String::from),
+        Type::Nominal { id, .. } => id.split('.').next_back().map(String::from),
         _ => None,
     }
 }

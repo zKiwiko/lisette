@@ -1,3 +1,4 @@
+use crate::checker::EnvResolve;
 use syntax::EcoString;
 use syntax::ast::DeadCodeCause;
 use syntax::ast::{BinaryOperator, Expression, Span, UnaryOperator};
@@ -5,9 +6,9 @@ use syntax::program::Visibility;
 use syntax::types::Type;
 
 use super::super::Checker;
-use super::super::checks::{check_is_non_addressable, check_non_addressable_assignment_target};
-use crate::checker::PostInferenceCheck;
-use crate::facts::DiscardedTailKind;
+use super::super::addressability::{
+    check_is_non_addressable, check_non_addressable_assignment_target,
+};
 
 /// Checks whether an assignment target expression contains a deref (`.* `)
 /// anywhere in its chain. For example, `p.*.x` is a `DotAccess` wrapping a
@@ -113,7 +114,7 @@ impl Checker<'_, '_> {
             }
         }
 
-        self.inference.in_subexpression = parent_is_subexpression;
+        self.scopes.set_in_subexpression(parent_is_subexpression);
         let new_expression = self.infer_expression(*expression, expected_ty);
         let new_ty = new_expression.get_type();
 
@@ -132,13 +133,12 @@ impl Checker<'_, '_> {
     ) -> Expression {
         if items.is_empty() {
             let unit_ty = self.type_unit();
-            let resolved = expected_ty.resolve();
-            if let Type::Constructor { id, params, .. } = &resolved
-                && id.ends_with("Map")
-                && params.len() == 2
+            let resolved = expected_ty.resolve_in(&self.env);
+            if let Some((syntax::types::CompoundKind::Map, args)) = resolved.as_compound()
+                && args.len() == 2
             {
-                let k = params[0].resolve();
-                let v = params[1].resolve();
+                let k = args[0].resolve_in(&self.env);
+                let v = args[1].resolve_in(&self.env);
                 self.sink
                     .push(diagnostics::infer::invalid_map_initialization(&k, &v, span));
             } else {
@@ -177,7 +177,7 @@ impl Checker<'_, '_> {
         let inner_ty = self.new_type_var();
         let new_expression = self.infer_expression(*expression, &inner_ty);
 
-        let resolved_inner = inner_ty.resolve();
+        let resolved_inner = inner_ty.resolve_in(&self.env);
         let is_already_ref = resolved_inner.is_ref();
 
         // Collapse &ref_var to ref_var — adding another reference layer is a no-op
@@ -192,12 +192,7 @@ impl Checker<'_, '_> {
         self.unify(expected_ty, &ref_ty, &span);
 
         if !is_already_ref {
-            if self.has_newtype_dot0_in_chain(&new_expression) {
-                self.sink
-                    .push(diagnostics::infer::reference_through_newtype(span));
-            }
-
-            if let Some(kind) = check_is_non_addressable(&new_expression) {
+            if let Some(kind) = check_is_non_addressable(&new_expression, &self.env) {
                 self.sink
                     .push(diagnostics::infer::non_addressable_expression(kind, span));
             }
@@ -225,7 +220,7 @@ impl Checker<'_, '_> {
         let binding_id = self.scopes.lookup_binding_id(&value);
         if let Some(id) = binding_id {
             // Don't mark assignment targets as "used" - only mark actual uses
-            if !self.is_inferring_assignment_target() {
+            if !self.scopes.is_assignment_target_context() {
                 self.facts.mark_used(id);
             }
 
@@ -264,10 +259,6 @@ impl Checker<'_, '_> {
 
         self.unify(expected_ty, &identifier_ty, &span);
 
-        if !self.scopes.is_callee_context() {
-            self.check_native_value_usage(&value, &identifier_ty, span);
-        }
-
         Expression::Identifier {
             value,
             ty: identifier_ty,
@@ -288,25 +279,24 @@ impl Checker<'_, '_> {
         // Prevent simple assignment targets from being marked as "used" in the lint system.
         // Complex targets like `a[i]` or `r.*` have subexpressions that ARE being read.
         let is_simple_target = matches!(&*target, Expression::Identifier { .. });
-        if is_simple_target {
-            self.set_inferring_assignment_target();
-        }
+        let prev_ctx = if is_simple_target {
+            Some(self.scopes.set_assignment_target_context())
+        } else {
+            None
+        };
         let new_target = self.infer_expression(*target, &target_ty);
-        if is_simple_target {
-            self.clear_inferring_assignment_target();
+        if let Some(ctx) = prev_ctx {
+            self.scopes.restore_use_context(ctx);
         }
 
-        if let Some(kind) = check_non_addressable_assignment_target(&new_target) {
+        if let Some(kind) = check_non_addressable_assignment_target(&new_target, &self.env) {
             self.sink
                 .push(diagnostics::infer::non_addressable_assignment(kind, span));
         }
 
-        self.check_newtype_field_assignment(&new_target, span);
-        self.check_map_field_chain_assignment(&new_target, span);
-
         // Propagates type information to the RHS (e.g., lambda params
         // get their types from a Map's value type).
-        let value_expected = target_ty.resolve();
+        let value_expected = target_ty.resolve_in(&self.env);
         let new_value = self.infer_expression(*value, &value_expected);
         let value_ty = new_value.get_type();
 
@@ -331,7 +321,7 @@ impl Checker<'_, '_> {
             let binding_is_ref = self
                 .scopes
                 .lookup_value(&var_name)
-                .map(|t| t.resolve().is_ref())
+                .map(|t| t.resolve_in(&self.env).is_ref())
                 .unwrap_or(false);
 
             let can_mutate = is_mutable || is_deref || binding_is_ref;
@@ -386,7 +376,7 @@ impl Checker<'_, '_> {
         span: Span,
         expected_ty: &Type,
     ) -> Expression {
-        let expected_elements: Vec<Type> = match expected_ty.resolve() {
+        let expected_elements: Vec<Type> = match expected_ty.resolve_in(&self.env) {
             Type::Tuple(elems) if elems.len() == elements.len() => elems,
             _ => elements.iter().map(|_| self.new_type_var()).collect(),
         };
@@ -398,10 +388,6 @@ impl Checker<'_, '_> {
                 self.with_value_context(|s| s.infer_expression(element, expected))
             })
             .collect();
-
-        for elem in &inferred_elements {
-            self.check_not_temp_producing(elem);
-        }
 
         let element_types: Vec<Type> = inferred_elements.iter().map(|e| e.get_type()).collect();
 
@@ -434,7 +420,6 @@ impl Checker<'_, '_> {
             }
 
             let is_last = i == items_len - 1;
-            let is_literal = matches!(item, Expression::Literal { .. });
             let item_span = item.get_span();
 
             let is_statement_only = matches!(
@@ -447,18 +432,16 @@ impl Checker<'_, '_> {
 
             let suppress_unused_check = item.is_control_flow();
 
-            let callee_name = item.callee_name();
-
             // Reject statement-only items (let, =, task, defer) as block tail
             // when the block is expected to produce a non-unit value.
             if is_last && is_statement_only {
-                let expected = last_item_expected_ty.resolve();
+                let expected = self.env.resolve(&last_item_expected_ty);
                 if last_item_expected_ty.is_ignored() {
                     // ignored context — never fire
-                } else if matches!(expected, Type::Variable(_)) {
-                    // Type not yet resolved — defer check until after inference
-                    self.post_inference_checks
-                        .push(PostInferenceCheck::StatementTail {
+                } else if matches!(expected, Type::Var { .. }) {
+                    self.facts
+                        .statement_tail_checks
+                        .push(crate::facts::StatementTailCheck {
                             expected_ty: last_item_expected_ty.clone(),
                             span: item_span,
                         });
@@ -484,62 +467,11 @@ impl Checker<'_, '_> {
                 None
             };
 
-            // Mark as top-level statement so `Err(x)?`/`None?` is allowed here
-            // but rejected when nested inside a compound sub-expression.
-            self.inference.in_subexpression = false;
+            self.scopes.set_in_subexpression(false);
             let inferred_item = self.infer_expression(item, &expression_ty);
 
             if let Some(ctx) = prev_ctx {
                 self.scopes.restore_use_context(ctx);
-            }
-
-            if !is_statement_only && !suppress_unused_check && !is_last {
-                let mut allowed_lints = callee_name
-                    .as_ref()
-                    .map(|name| self.callee_allowed_lints(name, &inferred_item))
-                    .unwrap_or_default();
-
-                // Channel send returns bool but fire-and-forget is the common pattern
-                if Self::is_channel_send(&inferred_item) {
-                    allowed_lints.push("unused_value".to_string());
-                }
-
-                self.check_unused_expression(
-                    item_span,
-                    &expression_ty.resolve(),
-                    is_literal,
-                    &allowed_lints,
-                );
-            }
-
-            if is_last
-                && !is_statement_only
-                && !suppress_unused_check
-                && last_item_expected_ty.is_ignored()
-                && let Some(callee_return_ty) = Self::get_call_return_type(&inferred_item)
-            {
-                let resolved = callee_return_ty.resolve();
-                let classification = if resolved.is_result() {
-                    Some(("unused_result", DiscardedTailKind::Result))
-                } else if resolved.is_option() {
-                    Some(("unused_option", DiscardedTailKind::Option))
-                } else if resolved.is_partial() {
-                    Some(("unused_partial", DiscardedTailKind::Partial))
-                } else {
-                    None
-                };
-
-                if let Some((lint_name, kind)) = classification {
-                    let allowed_lints = callee_name
-                        .as_ref()
-                        .map(|name| self.callee_allowed_lints(name, &inferred_item))
-                        .unwrap_or_default();
-
-                    if !allowed_lints.contains(&lint_name.to_string()) {
-                        self.facts
-                            .add_discarded_tail(item_span, kind, resolved.to_string());
-                    }
-                }
             }
 
             if let Some(cause) = inferred_item.diverges() {

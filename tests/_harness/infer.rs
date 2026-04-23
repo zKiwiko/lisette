@@ -75,11 +75,6 @@ pub fn infer_module(module_name: &str, fs: MockFileSystem) -> InferResult {
             checker.store.store_module(&module_id, files);
             checker.register_module(&module_id);
             checker.infer_module(&module_id);
-            semantics::checker::infer::checks::check_interface_visibility(
-                checker.store,
-                &module_id,
-                &sink,
-            );
 
             checker.cursor.module_id = prev_module_id;
         }
@@ -92,6 +87,29 @@ pub fn infer_module(module_name: &str, fs: MockFileSystem) -> InferResult {
             .collect();
 
         if !checker.failed() {
+            let module_ids: Vec<String> = checker.store.modules.keys().cloned().collect();
+            for mid in &module_ids {
+                let typed_ast: Vec<_> = checker
+                    .store
+                    .get_module(mid)
+                    .map(|m| m.files.values().flat_map(|f| f.items.clone()).collect())
+                    .unwrap_or_default();
+                let is_typedef = checker
+                    .store
+                    .get_module(mid)
+                    .map(|m| !m.typedefs.is_empty() && m.files.is_empty())
+                    .unwrap_or(false);
+                let mut ctx = semantics::validators::ValidatorContext {
+                    typed_ast: &typed_ast,
+                    is_typedef,
+                    module_id: mid,
+                    store: checker.store,
+                    facts: &mut checker.facts,
+                    coercions: &checker.coercions,
+                    sink: checker.sink,
+                };
+                semantics::validators::run_all(&mut ctx);
+            }
             let pattern_ctx = pattern_analysis::Context::new(
                 checker.store,
                 &checker.facts.or_pattern_error_spans,
@@ -333,27 +351,84 @@ fn ensure_no_errors(errors: &[LisetteDiagnostic]) {
 }
 
 fn is_slice_with_type_var(ty: &Type) -> bool {
-    let normalized = ty.resolve();
-    matches!(
-        normalized,
-        Type::Constructor { id, params, .. } if id.rsplit('.').next().unwrap_or("") == "Slice" && params.len() == 1 && matches!(params[0], Type::Variable(_))
-    )
+    match ty {
+        Type::Nominal { id, params, .. } => {
+            id.rsplit('.').next().unwrap_or("") == "Slice"
+                && params.len() == 1
+                && matches!(params[0], Type::Var { .. })
+        }
+        Type::Compound {
+            kind: syntax::types::CompoundKind::Slice,
+            args,
+        } => args.len() == 1 && matches!(args[0], Type::Var { .. }),
+        _ => false,
+    }
 }
 
 fn types_equal(t1: &Type, t2: &Type) -> bool {
-    let resolved_t1 = t1.resolve();
-    let resolved_t2 = t2.resolve();
+    if let (Some(n1), Some(n2)) = (t1.get_name(), t2.get_name())
+        && n1 == n2
+    {
+        let args1 = t1.get_type_params().unwrap_or(&[]);
+        let args2 = t2.get_type_params().unwrap_or(&[]);
+        if args1.len() == args2.len()
+            && args1
+                .iter()
+                .zip(args2.iter())
+                .all(|(a1, a2)| types_equal(a1, a2))
+        {
+            return true;
+        }
+    }
 
-    match (&resolved_t1, &resolved_t2) {
-        (Type::Variable(_), Type::Variable(_)) => true,
+    match (t1, t2) {
+        (Type::Compound { kind, args }, Type::Nominal { id, params, .. })
+        | (Type::Nominal { id, params, .. }, Type::Compound { kind, args }) => {
+            let leaf = id.rsplit('.').next().unwrap_or("");
+            if kind.leaf_name() == leaf && args.len() == params.len() {
+                return args
+                    .iter()
+                    .zip(params.iter())
+                    .all(|(x, y)| types_equal(x, y));
+            }
+        }
+        (Type::Simple(kind), Type::Nominal { id, params, .. })
+        | (Type::Nominal { id, params, .. }, Type::Simple(kind)) => {
+            let leaf = id.rsplit('.').next().unwrap_or("");
+            if kind.leaf_name() == leaf && params.is_empty() {
+                return true;
+            }
+        }
+        _ => {}
+    }
+
+    if let Type::Nominal {
+        underlying_ty: Some(u),
+        ..
+    } = t1
+        && types_equal(u, t2)
+    {
+        return true;
+    }
+    if let Type::Nominal {
+        underlying_ty: Some(u),
+        ..
+    } = t2
+        && types_equal(t1, u)
+    {
+        return true;
+    }
+
+    match (t1, t2) {
+        (Type::Var { .. }, Type::Var { .. }) => true,
 
         (
-            Type::Constructor {
+            Type::Nominal {
                 id: id1,
                 params: args1,
                 underlying_ty: u1,
             },
-            Type::Constructor {
+            Type::Nominal {
                 id: id2,
                 params: args2,
                 ..
@@ -371,7 +446,7 @@ fn types_equal(t1: &Type, t2: &Type) -> bool {
                 return true;
             }
             if let Some(u) = u1
-                && types_equal(u, &resolved_t2)
+                && types_equal(u, t2)
             {
                 return true;
             }
@@ -404,6 +479,14 @@ fn types_equal(t1: &Type, t2: &Type) -> bool {
                     .iter()
                     .zip(elems2.iter())
                     .all(|(e1, e2)| types_equal(e1, e2))
+        }
+
+        (Type::Simple(k1), Type::Simple(k2)) => k1 == k2,
+
+        (Type::Compound { kind: k1, args: a1 }, Type::Compound { kind: k2, args: a2 }) => {
+            k1 == k2
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2.iter()).all(|(x, y)| types_equal(x, y))
         }
 
         _ => false,

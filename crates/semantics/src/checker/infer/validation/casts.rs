@@ -1,3 +1,4 @@
+use crate::checker::EnvResolve;
 use syntax::ast::{Expression, Span};
 use syntax::types::Type;
 
@@ -21,8 +22,8 @@ impl Checker<'_, '_> {
         raw_target_ty: &Type,
         span: Span,
     ) {
-        let source_ty = raw_source_ty.resolve();
-        let target_ty = raw_target_ty.resolve();
+        let source_ty = raw_source_ty.resolve_in(&self.env);
+        let target_ty = raw_target_ty.resolve_in(&self.env);
 
         if source_ty.is_complex() || target_ty.is_complex() {
             self.sink.push(diagnostics::infer::invalid_cast(
@@ -51,7 +52,7 @@ impl Checker<'_, '_> {
         // Used for explicit coercion before wrapping in generic containers,
         // e.g. `Some(my_dog as Animal)` to get `Option<Animal>`.
         let peeled_target = self.store.peel_alias(&target_ty);
-        if let Type::Constructor { id, params, .. } = &peeled_target
+        if let Type::Nominal { id, params, .. } = &peeled_target
             && let Some(interface) = self.store.get_interface(id).cloned()
             && self
                 .satisfies_interface(&source_ty, &interface, params, &span)
@@ -85,9 +86,9 @@ impl Checker<'_, '_> {
         raw_target_ty: &Type,
         span: Span,
     ) -> bool {
-        let source_ty = raw_source_ty.resolve();
+        let source_ty = raw_source_ty.resolve_in(&self.env);
 
-        if source_ty == raw_target_ty.resolve() {
+        if source_ty == raw_target_ty.resolve_in(&self.env) {
             self.sink
                 .push(diagnostics::infer::redundant_cast(&source_ty, span));
             return true;
@@ -106,8 +107,8 @@ impl Checker<'_, '_> {
         expected_ty: &Type,
         span: Span,
     ) {
-        let target_resolved = target_ty.resolve();
-        let expected_resolved = expected_ty.resolve();
+        let target_resolved = target_ty.resolve_in(&self.env);
+        let expected_resolved = expected_ty.resolve_in(&self.env);
 
         if expected_resolved.is_variable() {
             return;

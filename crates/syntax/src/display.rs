@@ -1,11 +1,11 @@
 use std::fmt;
 
-use crate::types::{Type, TypeVariableState, unqualified_name};
+use crate::types::Type;
 
 impl Type {
     pub fn stringify(&self) -> String {
         match self {
-            Type::Constructor {
+            Type::Nominal {
                 id, params: args, ..
             } => {
                 let args_formatted = args
@@ -14,7 +14,7 @@ impl Type {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                let name = unqualified_name(id);
+                let name = id.last_segment();
 
                 if name == "Unit" {
                     return "()".to_string();
@@ -39,12 +39,9 @@ impl Type {
                 format!("{}<{}>", name, args_formatted)
             }
 
-            Type::Variable(var) => match &*var.borrow() {
-                TypeVariableState::Unbound { id, hint } => match hint {
-                    Some(name) => format!("?{}", name),
-                    None => format!("?{}", id),
-                },
-                TypeVariableState::Link(ty) => format!("{}", ty),
+            Type::Var { id, hint } => match hint {
+                Some(name) => format!("?{}", name),
+                None => format!("?{}", id.as_u32()),
             },
 
             Type::Function {
@@ -90,6 +87,31 @@ impl Type {
             }
 
             Type::Error => "<error>".to_string(),
+
+            Type::ImportNamespace(module_id) => {
+                let path = module_id.strip_prefix("go:").unwrap_or(module_id);
+                path.rsplit('/').next().unwrap_or(module_id).to_string()
+            }
+
+            Type::ReceiverPlaceholder => "self".to_string(),
+
+            Type::Simple(kind) => match kind {
+                crate::types::SimpleKind::Unit => "()".to_string(),
+                _ => kind.leaf_name().to_string(),
+            },
+
+            Type::Compound { kind, args } => {
+                let args_formatted = args
+                    .iter()
+                    .map(|a| a.stringify())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if args.is_empty() {
+                    kind.leaf_name().to_string()
+                } else {
+                    format!("{}<{}>", kind.leaf_name(), args_formatted)
+                }
+            }
         }
     }
 }

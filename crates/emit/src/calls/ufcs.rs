@@ -40,17 +40,17 @@ impl Emitter<'_> {
             return None;
         }
 
-        let instantiated_ty = function.get_type().resolve();
+        let instantiated_ty = function.get_type();
         let mut mapping: HashMap<String, Type> = HashMap::default();
         extract_type_mapping(body, &instantiated_ty, &mut mapping);
 
         let mut go_type_strs = Vec::new();
-        if let Type::Constructor { params, .. } = receiver_ty {
+        if let Type::Nominal { params, .. } = receiver_ty {
             for param in params {
                 go_type_strs.push(self.go_type_as_string(param));
             }
         }
-        let base_generics_count = if let Type::Constructor { params, .. } = receiver_ty {
+        let base_generics_count = if let Type::Nominal { params, .. } = receiver_ty {
             params.len()
         } else {
             0
@@ -87,8 +87,8 @@ impl Emitter<'_> {
             unreachable!("emit_ufcs_call called on non-DotAccess");
         };
 
-        let receiver_ty = receiver.get_type().resolve().strip_refs().clone();
-        let Type::Constructor {
+        let receiver_ty = receiver.get_type().strip_refs().clone();
+        let Type::Nominal {
             id: qualified_name, ..
         } = &receiver_ty
         else {

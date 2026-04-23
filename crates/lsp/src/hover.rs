@@ -128,7 +128,7 @@ pub(crate) fn get_hover_type_and_span(
                             && offset >= span.byte_offset
                             && offset < span.byte_offset + span.byte_length
                         {
-                            let slice_ty = syntax::types::Type::Constructor {
+                            let slice_ty = syntax::types::Type::Nominal {
                                 id: "Slice".into(),
                                 params: vec![elem_type.clone()],
                                 underlying_ty: None,
@@ -325,7 +325,7 @@ fn resolve_dot_access_doc(
     file: &syntax::program::File,
     snapshot: &AnalysisSnapshot,
 ) -> Option<String> {
-    if let Some(type_id) = type_name(&expression.get_type().resolve()) {
+    if let Some(type_id) = type_name(&expression.get_type()) {
         let qualified = format!("{}.{}", type_id, member);
         if let Some(def) = snapshot.definitions().get(qualified.as_str())
             && let Some(doc) = def.doc()
@@ -404,8 +404,7 @@ pub(crate) fn get_hover_doc(
             ty,
             ..
         } => {
-            let resolved = ty.resolve();
-            let type_id = type_name(&resolved)?;
+            let type_id = type_name(ty)?;
 
             if let Some(fa) = field_assignments
                 .iter()

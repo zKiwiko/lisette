@@ -11,10 +11,11 @@ use syntax::program::{CallKind, Definition};
 use syntax::types::Type;
 
 fn extract_return_type_param(function: &Expression) -> Option<Type> {
-    let Type::Function { return_type, .. } = function.get_type().resolve() else {
+    let ty = function.get_type();
+    let Type::Function { return_type, .. } = ty.unwrap_forall() else {
         return None;
     };
-    let Type::Constructor { params, .. } = return_type.as_ref() else {
+    let Type::Nominal { params, .. } = return_type.as_ref() else {
         return None;
     };
     params.first().cloned()
@@ -31,10 +32,11 @@ impl Emitter<'_> {
             return self.annotation_to_go_type(&type_args[0]);
         }
         if let Some(call_result_ty) = call_ty
-            && let Type::Constructor { params, .. } = call_result_ty.resolve()
-            && let Some(first) = params.first()
+            && let Some(first) = call_result_ty
+                .get_type_params()
+                .and_then(|ps| ps.first().cloned())
         {
-            return self.go_type_as_string(first);
+            return self.go_type_as_string(&first);
         }
         let param = extract_return_type_param(function)
             .expect("constructor must have constructor return type");
@@ -54,7 +56,7 @@ impl Emitter<'_> {
             );
         }
         if let Some(call_result_ty) = call_ty
-            && let Type::Constructor { params, .. } = call_result_ty.resolve()
+            && let Some(params) = call_result_ty.get_type_params()
             && params.len() >= 2
         {
             return (
@@ -62,13 +64,13 @@ impl Emitter<'_> {
                 self.go_type_as_string(&params[1]),
             );
         }
-        let return_type = function.get_type().resolve();
-        let Type::Function { return_type, .. } = return_type else {
+        let ty = function.get_type();
+        let Type::Function { return_type, .. } = ty.unwrap_forall() else {
             unreachable!("MapNew must be a function");
         };
-        let Type::Constructor { params, .. } = return_type.as_ref() else {
-            unreachable!("MapNew must return a constructor type");
-        };
+        let params = return_type
+            .get_type_params()
+            .expect("MapNew must return a type with type arguments");
         (
             self.go_type_as_string(&params[0]),
             self.go_type_as_string(&params[1]),
@@ -234,7 +236,7 @@ impl Emitter<'_> {
             return None;
         }
 
-        let instantiated_ty = function.get_type().resolve();
+        let instantiated_ty = function.get_type();
         let mut mapping: HashMap<String, Type> = HashMap::default();
         extract_type_mapping(&body, &instantiated_ty, &mut mapping);
 
@@ -322,7 +324,7 @@ impl Emitter<'_> {
     fn get_make_function_info(&mut self, function: &Expression) -> Option<(String, String)> {
         fn enum_id_from_type(ty: &Type) -> Option<String> {
             if let Type::Function { return_type, .. } = ty.unwrap_forall()
-                && let Type::Constructor { id, .. } = return_type.as_ref()
+                && let Type::Nominal { id, .. } = return_type.as_ref()
             {
                 return Some(id.to_string());
             }
@@ -331,15 +333,14 @@ impl Emitter<'_> {
 
         match function {
             Expression::Identifier { value, ty, .. } => {
-                let resolved_ty = ty.resolve();
-                let enum_id = enum_id_from_type(&resolved_ty)?;
+                let enum_id = enum_id_from_type(ty)?;
                 let variant = value.split('.').next_back().unwrap_or(value);
                 let enum_name = enum_id.split('.').next_back().unwrap_or(&enum_id);
                 let qualified = format!("{}.{}", enum_name, variant);
                 if self.module.make_functions.contains_key(&qualified) {
                     return Some((enum_id, variant.to_string()));
                 }
-                if let Type::Function { params, .. } = &resolved_ty {
+                if let Type::Function { params, .. } = ty.unwrap_forall() {
                     for key in self.module.make_functions.keys() {
                         if let Some((e_name, v_name)) = key.split_once('.')
                             && e_name == enum_name
@@ -398,15 +399,14 @@ impl Emitter<'_> {
     ) -> Option<String> {
         let ty = function.get_type();
 
-        let resolved = ty.resolve();
-        let Type::Function { return_type, .. } = resolved.unwrap_forall() else {
+        let Type::Function { return_type, .. } = ty.unwrap_forall() else {
             return None;
         };
         let return_ty = return_type.as_ref().clone();
 
-        let return_ty = call_ty.map(|t| t.resolve().clone()).unwrap_or(return_ty);
+        let return_ty = call_ty.cloned().unwrap_or(return_ty);
 
-        let Type::Constructor { id, .. } = return_ty.resolve() else {
+        let Type::Nominal { id, .. } = &return_ty else {
             return None;
         };
 
@@ -494,11 +494,10 @@ impl Emitter<'_> {
     }
 
     pub(crate) fn prelude_container_type_args(&mut self, ty: &Type) -> Option<String> {
-        let resolved = ty.resolve();
-        if !resolved.is_option() && !resolved.is_result() && !resolved.is_partial() {
+        if !ty.is_option() && !ty.is_result() && !ty.is_partial() {
             return None;
         }
-        let Type::Constructor { params, .. } = resolved else {
+        let Type::Nominal { params, .. } = ty else {
             return None;
         };
         if params.is_empty() {
@@ -507,7 +506,7 @@ impl Emitter<'_> {
         params
             .iter()
             .any(|p| self.as_interface(p).is_some() || self.is_go_function_alias(p))
-            .then(|| self.format_type_args(&params))
+            .then(|| self.format_type_args(params))
     }
 
     pub(super) fn is_prelude_variant_constructor(callee: &Expression) -> bool {

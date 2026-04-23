@@ -1,9 +1,9 @@
+use crate::checker::EnvResolve;
 use syntax::ast::{Expression, MatchArm, Pattern, SelectArm, SelectArmPattern, Span};
 use syntax::types::Type;
 
 use super::super::Checker;
-use super::super::checks::check_binding_pattern;
-use crate::checker::infer::checks::is_temp_producing;
+use crate::validators::temp_producing::is_temp_producing;
 
 impl Checker<'_, '_> {
     pub(super) fn infer_select(
@@ -17,7 +17,7 @@ impl Checker<'_, '_> {
             self.unify(expected_ty, &Type::unit(), &span);
             return Expression::Select {
                 arms: vec![],
-                ty: expected_ty.resolve(),
+                ty: expected_ty.resolve_in(&self.env),
                 span,
             };
         }
@@ -70,7 +70,7 @@ impl Checker<'_, '_> {
         // Reject non-exhaustive select expressions in value position:
         // shorthand receive arms without a default arm can silently return
         // a zero value when the channel is closed or the pattern doesn't match.
-        let resolved_result = result_ty.resolve();
+        let resolved_result = result_ty.resolve_in(&self.env);
         if !resolved_result.is_unit() && !resolved_result.is_variable() {
             let has_shorthand_receive = new_arms
                 .iter()
@@ -103,7 +103,7 @@ impl Checker<'_, '_> {
 
         self.check_complex_select_expression(&new_receive_expression);
 
-        let element_ty = if Self::is_channel_receive_call(&new_receive_expression) {
+        let element_ty = if self.is_channel_receive_call(&new_receive_expression) {
             receive_ty.clone()
         } else {
             self.sink.push(diagnostics::infer::expected_channel_receive(
@@ -167,12 +167,10 @@ impl Checker<'_, '_> {
             syntax::ast::BindingKind::Let { mutable: false },
         );
 
-        check_binding_pattern(self.sink, &new_binding);
-
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, true);
-        self.inference.in_subexpression = false;
+        let saved_in_match_arm = self.scopes.set_in_match_arm(true);
+        self.scopes.set_in_subexpression(false);
         let new_body = self.infer_expression(*body, result_ty);
-        self.inference.in_match_arm = saved_in_match_arm;
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         SelectArmPattern::Receive {
             binding: Box::new(new_binding),
@@ -193,18 +191,18 @@ impl Checker<'_, '_> {
 
         self.check_complex_select_expression(&new_send_expression);
 
-        if !Self::is_channel_send_call(&new_send_expression)
-            && !Self::is_channel_receive_call(&new_send_expression)
+        if !self.is_channel_send_call(&new_send_expression)
+            && !self.is_channel_receive_call(&new_send_expression)
         {
             self.sink.push(diagnostics::infer::expected_channel_send(
                 new_send_expression.get_span(),
             ));
         }
 
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, true);
-        self.inference.in_subexpression = false;
+        let saved_in_match_arm = self.scopes.set_in_match_arm(true);
+        self.scopes.set_in_subexpression(false);
         let new_body = self.infer_expression(*body, result_ty);
-        self.inference.in_match_arm = saved_in_match_arm;
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         SelectArmPattern::Send {
             send_expression: Box::new(new_send_expression),
@@ -223,7 +221,7 @@ impl Checker<'_, '_> {
 
         self.check_complex_select_expression(&new_receive_expression);
 
-        if !Self::is_channel_receive_call(&new_receive_expression) {
+        if !self.is_channel_receive_call(&new_receive_expression) {
             self.sink.push(diagnostics::infer::expected_channel_receive(
                 &receive_ty,
                 new_receive_expression.get_span(),
@@ -232,7 +230,7 @@ impl Checker<'_, '_> {
 
         self.check_select_match_arms(&match_arms, new_receive_expression.get_span());
 
-        let pattern_ty = receive_ty.resolve();
+        let pattern_ty = receive_ty.resolve_in(&self.env);
 
         let new_match_arms = match_arms
             .into_iter()
@@ -251,9 +249,9 @@ impl Checker<'_, '_> {
                     Box::new(guard_expression)
                 });
 
-                let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, true);
+                let saved_in_match_arm = self.scopes.set_in_match_arm(true);
                 let new_expression = self.infer_expression(*match_arm.expression, result_ty);
-                self.inference.in_match_arm = saved_in_match_arm;
+                self.scopes.set_in_match_arm(saved_in_match_arm);
 
                 self.scopes.pop();
 
@@ -277,16 +275,16 @@ impl Checker<'_, '_> {
         body: Box<Expression>,
         result_ty: &Type,
     ) -> SelectArmPattern {
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, true);
-        self.inference.in_subexpression = false;
+        let saved_in_match_arm = self.scopes.set_in_match_arm(true);
+        self.scopes.set_in_subexpression(false);
         let new_body = self.infer_expression(*body, result_ty);
-        self.inference.in_match_arm = saved_in_match_arm;
+        self.scopes.set_in_match_arm(saved_in_match_arm);
         SelectArmPattern::WildCard {
             body: Box::new(new_body),
         }
     }
 
-    pub(crate) fn is_channel_receive_call(expression: &Expression) -> bool {
+    pub(crate) fn is_channel_receive_call(&self, expression: &Expression) -> bool {
         if let Expression::Call {
             expression, args, ..
         } = expression
@@ -300,7 +298,7 @@ impl Checker<'_, '_> {
                 } = expression.as_ref()
                 && member == "receive"
             {
-                return Self::is_channel_type(&receiver.get_type());
+                return self.is_channel_type(&receiver.get_type());
             }
             // UFCS form after inference: Channel.receive(ch) is rewritten to
             // Identifier("Channel.receive") with 1 arg
@@ -308,7 +306,7 @@ impl Checker<'_, '_> {
                 && let Expression::Identifier { value, .. } = expression.as_ref()
                 && value.ends_with(".receive")
                 && Self::is_ufcs_channel_prefix(value)
-                && Self::is_channel_type(&args[0].get_type())
+                && self.is_channel_type(&args[0].get_type())
             {
                 return true;
             }
@@ -317,7 +315,7 @@ impl Checker<'_, '_> {
     }
 
     /// Check if an expression is a channel send call: `ch.send(value)` or `Channel.send(ch, value)`.
-    pub(crate) fn is_channel_send_call(expression: &Expression) -> bool {
+    pub(crate) fn is_channel_send_call(&self, expression: &Expression) -> bool {
         if let Expression::Call {
             expression, args, ..
         } = expression
@@ -330,7 +328,7 @@ impl Checker<'_, '_> {
             } = expression.as_ref()
                 && member == "send"
                 && args.len() == 1
-                && Self::is_channel_type(&receiver.get_type())
+                && self.is_channel_type(&receiver.get_type())
             {
                 return true;
             }
@@ -340,7 +338,7 @@ impl Checker<'_, '_> {
                 && let Expression::Identifier { value, .. } = expression.as_ref()
                 && value.ends_with(".send")
                 && Self::is_ufcs_channel_prefix(value)
-                && Self::is_channel_type(&args[0].get_type())
+                && self.is_channel_type(&args[0].get_type())
             {
                 return true;
             }
@@ -360,8 +358,8 @@ impl Checker<'_, '_> {
     }
 
     /// Check if a type is a channel-like type (Channel, Sender, Receiver).
-    fn is_channel_type(ty: &Type) -> bool {
-        let resolved = ty.resolve().strip_refs();
+    fn is_channel_type(&self, ty: &Type) -> bool {
+        let resolved = ty.resolve_in(&self.env).strip_refs();
         matches!(resolved.get_name(), Some("Channel" | "Sender" | "Receiver"))
     }
 

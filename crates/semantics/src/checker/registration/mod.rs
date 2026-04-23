@@ -11,7 +11,7 @@ use syntax::ast::{
     Span, StructKind, Visibility as SyntacticVisibility,
 };
 use syntax::program::{Definition, File, Visibility};
-use syntax::types::Type;
+use syntax::types::{Symbol, Type};
 
 use super::Checker;
 
@@ -120,7 +120,7 @@ impl Checker<'_, '_> {
         for (qualified_name, definition) in type_name_entries {
             module
                 .definitions
-                .entry(qualified_name.into())
+                .entry(qualified_name)
                 .or_insert(definition);
         }
 
@@ -288,7 +288,7 @@ impl Checker<'_, '_> {
         for (qualified_name, definition) in entries {
             module
                 .definitions
-                .entry(qualified_name.into())
+                .entry(qualified_name)
                 .or_insert(definition);
         }
     }
@@ -298,7 +298,7 @@ impl Checker<'_, '_> {
         items: &[Expression],
         visibility: &Visibility,
         is_typedef: bool,
-    ) -> Vec<(String, Definition)> {
+    ) -> Vec<(Symbol, Definition)> {
         let mut entries = Vec::new();
 
         for item in items {
@@ -339,18 +339,39 @@ impl Checker<'_, '_> {
                 .map(|g| Type::Parameter(g.name.clone()))
                 .collect();
 
-            let constructor_ty = Type::Constructor {
-                id: qualified_name.clone().into(),
-                params: args,
-                underlying_ty: None,
+            // Canonical form for prelude-registered native types uses the
+            // dedicated Simple/Compound variants; everything else remains a
+            // nominal Constructor.
+            let canonical_ty = if self.cursor.module_id == "prelude" {
+                if let Some(simple) = syntax::types::SimpleKind::from_name(name) {
+                    debug_assert!(args.is_empty(), "simple kinds have no generics");
+                    Type::Simple(simple)
+                } else if let Some(compound) = syntax::types::CompoundKind::from_name(name) {
+                    Type::Compound {
+                        kind: compound,
+                        args,
+                    }
+                } else {
+                    Type::Nominal {
+                        id: qualified_name.clone(),
+                        params: args,
+                        underlying_ty: None,
+                    }
+                }
+            } else {
+                Type::Nominal {
+                    id: qualified_name.clone(),
+                    params: args,
+                    underlying_ty: None,
+                }
             };
 
             let ty = if generics.is_empty() {
-                constructor_ty
+                canonical_ty
             } else {
                 Type::Forall {
                     vars: generics.iter().map(|g| g.name.clone()).collect(),
-                    body: Box::new(constructor_ty),
+                    body: Box::new(canonical_ty),
                 }
             };
 
@@ -534,7 +555,7 @@ impl Checker<'_, '_> {
             .get_module_mut(&self.cursor.module_id)
             .expect("current module must exist in store");
         module.definitions.insert(
-            qualified_name.into(),
+            qualified_name,
             Definition::Value {
                 visibility: item_visibility,
                 ty: fn_ty,
@@ -602,7 +623,7 @@ impl Checker<'_, '_> {
             .get_module_mut(&self.cursor.module_id)
             .expect("current module must exist in store");
         module.definitions.insert(
-            qualified_name.into(),
+            qualified_name,
             Definition::Value {
                 visibility: item_visibility,
                 ty: const_ty,
@@ -646,7 +667,7 @@ impl Checker<'_, '_> {
             .get_module_mut(&self.cursor.module_id)
             .expect("current module must exist in store");
         module.definitions.insert(
-            qualified_name.into(),
+            qualified_name,
             Definition::Value {
                 visibility: item_visibility,
                 ty: var_ty,
@@ -695,7 +716,7 @@ impl Checker<'_, '_> {
         let scope = self.scopes.current_mut();
         scope
             .values
-            .insert(qualified_name.clone(), constructor_ty.clone());
+            .insert(qualified_name.to_string(), constructor_ty.clone());
         scope
             .values
             .insert(name.to_string(), constructor_ty.clone());
@@ -925,7 +946,7 @@ pub(super) fn has_recursive_instantiation(target_id: &str, ty: &Type) -> bool {
 
 fn walk_type(ty: &Type, predicate: &dyn Fn(&str, &[Type]) -> bool) -> bool {
     match ty {
-        Type::Constructor { id, params, .. } => {
+        Type::Nominal { id, params, .. } => {
             predicate(id, params) || params.iter().any(|p| walk_type(p, predicate))
         }
         Type::Function {

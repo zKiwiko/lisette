@@ -3,7 +3,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use ecow::EcoString;
 
 use crate::ast::{BindingId as AstBindingId, Pattern, RestPattern, Span};
-use crate::types::Type;
+use crate::types::{Symbol, Type};
 
 use super::{Definition, File, ModuleInfo};
 
@@ -145,9 +145,14 @@ pub enum NativeTypeKind {
 
 impl NativeTypeKind {
     pub fn from_type(ty: &Type) -> Option<Self> {
-        let resolved = ty.resolve().strip_refs();
-        if let Type::Constructor { ref id, .. } = resolved
-            && (id.starts_with("@import/go:") || id.starts_with("go:"))
+        let resolved = ty.strip_refs();
+        // Skip module namespaces and Go-imported types: their leaf name can
+        // collide with a native type (e.g. `Slice`), but they are not native.
+        if resolved.as_import_namespace().is_some() {
+            return None;
+        }
+        if let Type::Nominal { ref id, .. } = resolved
+            && id.as_str().starts_with("go:")
         {
             return None;
         }
@@ -225,7 +230,7 @@ impl ResolutionInfo {
 
 pub struct EmitInput {
     pub files: HashMap<u32, File>,
-    pub definitions: HashMap<EcoString, Definition>,
+    pub definitions: HashMap<Symbol, Definition>,
     pub modules: HashMap<String, ModuleInfo>,
     pub entry_module_id: String,
     pub unused: UnusedInfo,

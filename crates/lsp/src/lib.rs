@@ -203,7 +203,7 @@ impl LanguageServer for Backend {
 
         let (ty, span) = hover::get_hover_type_and_span(expression, offset);
 
-        if ty.is_unbound_variable() {
+        if ty.is_type_var() || ty.is_error() {
             return Ok(None);
         }
 
@@ -697,7 +697,7 @@ impl LanguageServer for Backend {
             && let Some(fa) = field_assignments
                 .iter()
                 .find(|fa| offset_in_span(offset, &fa.name_span))
-            && type_name(&ty.resolve())
+            && type_name(ty)
                 .and_then(|type_id| find_struct_field_span(type_id, &fa.name, &snapshot))
                 .is_some()
         {

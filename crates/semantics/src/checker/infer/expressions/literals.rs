@@ -1,3 +1,4 @@
+use crate::checker::EnvResolve;
 use syntax::ast::{Expression, FormatStringPart, Literal, Span};
 use syntax::types::Type;
 
@@ -23,7 +24,7 @@ impl Checker<'_, '_> {
             }
 
             Literal::Integer { value, text } => {
-                let resolved = expected_ty.resolve();
+                let resolved = expected_ty.resolve_in(&self.env);
                 let ty = if resolved.is_numeric() {
                     let is_pre_negated = text.as_deref().is_some_and(|t| t.starts_with('-'));
                     if is_pre_negated {
@@ -50,7 +51,7 @@ impl Checker<'_, '_> {
             }
 
             Literal::Float { value, text } => {
-                let resolved = expected_ty.resolve();
+                let resolved = expected_ty.resolve_in(&self.env);
                 let ty = if resolved.is_float() {
                     // Float overflow is symmetric (absolute value matters), so check regardless
                     // of negation context
@@ -92,7 +93,7 @@ impl Checker<'_, '_> {
             }
 
             Literal::Char(char) => {
-                let resolved = expected_ty.resolve();
+                let resolved = expected_ty.resolve_in(&self.env);
                 let ty = if resolved.is_numeric() {
                     if let Some(codepoint) = char_literal_codepoint(&char) {
                         self.check_integer_literal_overflow(codepoint, &resolved, span);
@@ -114,7 +115,7 @@ impl Checker<'_, '_> {
             Literal::Slice(elements) => {
                 // If expected type is Slice<T>, propagate T to element inference
                 // so literals can adapt (e.g., `let x: Slice<int8> = [1, 2, 3]` works)
-                let resolved = expected_ty.resolve();
+                let resolved = expected_ty.resolve_in(&self.env);
                 let element_expected_ty = if resolved.get_name() == Some("Slice") {
                     resolved
                         .inner()
@@ -129,10 +130,6 @@ impl Checker<'_, '_> {
                         self.with_value_context(|s| s.infer_expression(e, &element_expected_ty))
                     })
                     .collect();
-
-                for elem in &new_elements {
-                    self.check_not_temp_producing(elem);
-                }
 
                 let slice_ty = self.type_slice(element_expected_ty);
                 self.unify(expected_ty, &slice_ty, &span);
@@ -155,7 +152,6 @@ impl Checker<'_, '_> {
                         FormatStringPart::Expression(expression) => {
                             let type_var = self.new_type_var();
                             let inferred_expression = self.infer_expression(*expression, &type_var);
-                            self.check_not_temp_producing(&inferred_expression);
                             FormatStringPart::Expression(Box::new(inferred_expression))
                         }
                     })
@@ -163,7 +159,7 @@ impl Checker<'_, '_> {
 
                 if is_single_expression
                     && let Some(FormatStringPart::Expression(expression)) = new_parts.first()
-                    && expression.get_type().resolve().is_string()
+                    && expression.get_type().resolve_in(&self.env).is_string()
                 {
                     self.facts.add_expression_only_fstring(span);
                 }

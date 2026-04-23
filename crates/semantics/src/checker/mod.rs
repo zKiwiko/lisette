@@ -1,10 +1,11 @@
+pub mod freeze;
 pub mod infer;
 pub(crate) mod registration;
 pub mod scopes;
+pub mod type_env;
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use crate::facts::Facts;
 use crate::store::Store;
@@ -16,24 +17,9 @@ use syntax::ast::{Annotation, Expression, Generic, ImportAlias, Span, StructFiel
 use syntax::program::{
     CoercionInfo, Definition, FileImport, MethodSignatures, Module, ResolutionInfo,
 };
-use syntax::types::{SubstitutionMap, Type, TypeVariableState, substitute};
+use syntax::types::{SubstitutionMap, Symbol, Type, substitute};
 
-#[derive(Debug, Default)]
-pub struct IdGen {
-    next_type_var_id: i32,
-}
-
-impl IdGen {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn new_type_var_id(&mut self) -> i32 {
-        let id = self.next_type_var_id;
-        self.next_type_var_id += 1;
-        id
-    }
-}
+pub use type_env::{EnvResolve, Speculation, TypeEnv, VarState};
 
 #[derive(Debug, Clone)]
 pub struct Cursor {
@@ -95,55 +81,8 @@ impl ImportState {
 /// These never change once populated, so no invalidation needed.
 type BuiltinCache = HashMap<String, Type>;
 
-pub(crate) struct InferenceState {
-    pub type_param_depth: u32,
-    pub satisfying_stack: rustc_hash::FxHashSet<(String, String)>,
-    pub inferring_assignment_target: bool,
-    pub impl_receiver_type: Option<Type>,
-    pub undo_log: Option<Vec<(Rc<RefCell<TypeVariableState>>, TypeVariableState)>>,
-    /// True when inside a match/select arm body. Used to determine whether
-    /// break/continue need Go labels (since Go switch cases don't fall through).
-    pub in_match_arm: bool,
-    /// One entry per enclosing loop; set to `true` when break/continue is
-    /// encountered inside a match arm (i.e. `in_match_arm` is true).
-    pub loop_needs_label_stack: Vec<bool>,
-    /// True when we are inside a compound expression (call arg, binary operand,
-    /// etc.).  Used to reject `Err(x)?`/`None?` in value positions where they
-    /// can never produce a value.
-    pub in_subexpression: bool,
-    /// Suppresses record-struct-as-value errors when the struct name is a type
-    /// qualifier in a method chain (e.g. `lib.Point` in `lib.Point.sum`).
-    pub dot_access_base: bool,
-}
-
-impl InferenceState {
-    pub fn new() -> Self {
-        Self {
-            type_param_depth: 0,
-            satisfying_stack: rustc_hash::FxHashSet::default(),
-            inferring_assignment_target: false,
-            impl_receiver_type: None,
-            undo_log: None,
-            in_match_arm: false,
-            loop_needs_label_stack: Vec::new(),
-            in_subexpression: false,
-            dot_access_base: false,
-        }
-    }
-}
-
-/// A check to run after inference completes for a file.
-pub enum PostInferenceCheck {
-    /// Generic call where type args couldn't be inferred (e.g., `Ok(42)` without context)
-    GenericCall { return_ty: Type, span: Span },
-    /// Empty collection binding where element type couldn't be inferred (e.g., `let x = []`)
-    EmptyCollection { name: String, ty: Type, span: Span },
-    /// Statement-only tail where expected type was a variable at check time
-    StatementTail { expected_ty: Type, span: Span },
-}
-
 pub struct Checker<'r, 's> {
-    pub ids: IdGen,
+    pub env: TypeEnv,
     pub store: &'r mut Store,
     pub scopes: Scopes,
     pub cursor: Cursor,
@@ -153,8 +92,10 @@ pub struct Checker<'r, 's> {
     pub facts: Facts,
     pub coercions: CoercionInfo,
     pub resolutions: ResolutionInfo,
-    pub post_inference_checks: Vec<PostInferenceCheck>,
-    pub(crate) inference: InferenceState,
+    /// Recursion guard for interface satisfaction. Prevents
+    /// `collect_interface_violations` from diverging when a bound on `T`
+    /// transitively requires checking `T` against the same interface.
+    pub satisfying_stack: rustc_hash::FxHashSet<(String, String)>,
     method_cache: RefCell<HashMap<EcoString, MethodSignatures>>,
     pub ufcs_methods: HashSet<(String, String)>,
 }
@@ -162,7 +103,7 @@ pub struct Checker<'r, 's> {
 impl<'r, 's> Checker<'r, 's> {
     pub fn new(store: &'r mut Store, sink: &'s DiagnosticSink) -> Self {
         Self {
-            ids: IdGen::new(),
+            env: TypeEnv::new(),
             store,
             scopes: Scopes::new(),
             cursor: Cursor::new(),
@@ -172,27 +113,24 @@ impl<'r, 's> Checker<'r, 's> {
             facts: Facts::new(),
             coercions: CoercionInfo::default(),
             resolutions: ResolutionInfo::default(),
-            post_inference_checks: Vec::new(),
-            inference: InferenceState::new(),
+            satisfying_stack: rustc_hash::FxHashSet::default(),
             method_cache: RefCell::new(HashMap::default()),
             ufcs_methods: HashSet::default(),
         }
     }
 
     pub fn new_type_var(&mut self) -> Type {
-        let id = self.new_type_var_id();
-        Type::Variable(Rc::new(RefCell::new(TypeVariableState::Unbound {
-            id,
-            hint: None,
-        })))
+        let id = self.env.fresh(None);
+        Type::Var { id, hint: None }
     }
 
     pub fn new_type_var_with_hint(&mut self, hint: &str) -> Type {
-        let id = self.new_type_var_id();
-        Type::Variable(Rc::new(RefCell::new(TypeVariableState::Unbound {
+        let hint: EcoString = hint.into();
+        let id = self.env.fresh(Some(hint.clone()));
+        Type::Var {
             id,
-            hint: Some(hint.into()),
-        })))
+            hint: Some(hint),
+        }
     }
 
     pub fn type_from_literal_expression(&mut self, expression: &Expression) -> Option<Type> {
@@ -217,12 +155,11 @@ impl<'r, 's> Checker<'r, 's> {
                 let map: SubstitutionMap = vars
                     .iter()
                     .map(|name| {
-                        let id = self.new_type_var_id();
-                        let fresh_var =
-                            Type::Variable(Rc::new(RefCell::new(TypeVariableState::Unbound {
-                                id,
-                                hint: Some(name.clone()),
-                            })));
+                        let id = self.env.fresh(Some(name.clone()));
+                        let fresh_var = Type::Var {
+                            id,
+                            hint: Some(name.clone()),
+                        };
                         (name.clone(), fresh_var)
                     })
                     .collect();
@@ -235,10 +172,6 @@ impl<'r, 's> Checker<'r, 's> {
 
     pub fn new_file_id(&mut self) -> u32 {
         self.store.new_file_id()
-    }
-
-    pub fn new_type_var_id(&mut self) -> i32 {
-        self.ids.new_type_var_id()
     }
 
     pub fn is_d_lis(&self) -> bool {
@@ -257,8 +190,8 @@ impl<'r, 's> Checker<'r, 's> {
         !self.is_d_lis()
     }
 
-    pub(crate) fn qualify_name(&self, name: &str) -> String {
-        format!("{}.{}", self.cursor.module_id, name)
+    pub(crate) fn qualify_name(&self, name: &str) -> Symbol {
+        Symbol::from_parts(&self.cursor.module_id, name)
     }
 
     pub(crate) fn put_in_scope(&mut self, generics: &[Generic]) {
@@ -331,20 +264,20 @@ impl<'r, 's> Checker<'r, 's> {
         }
 
         let module = self.store.get_module(&self.cursor.module_id)?;
-        let qualified_name = format!("{}.{}", module.id, type_name);
+        let qualified_name = Symbol::from_parts(&module.id, type_name);
 
         if module.definitions.contains_key(qualified_name.as_str()) {
-            return Some(qualified_name);
+            return Some(qualified_name.to_string());
         }
 
         for imported_module_id in &self.imports.unprefixed_imports {
             if let Some(imported_module) = self.store.get_module(imported_module_id) {
-                let qualified_name = format!("{}.{}", imported_module_id, type_name);
+                let qualified_name = Symbol::from_parts(imported_module_id, type_name);
                 if imported_module
                     .definitions
                     .contains_key(qualified_name.as_str())
                 {
-                    return Some(qualified_name);
+                    return Some(qualified_name.to_string());
                 }
             }
         }
@@ -385,7 +318,7 @@ impl<'r, 's> Checker<'r, 's> {
                 Type::Forall { body, .. } => body.as_ref(),
                 other => other,
             };
-            if let Type::Constructor { id, .. } = underlying
+            if let Type::Nominal { id, .. } = underlying
                 && let Some(Definition::Struct {
                     constructor: Some(ctor_ty),
                     ..
@@ -416,7 +349,7 @@ impl<'r, 's> Checker<'r, 's> {
         }
 
         let module = self.store.get_module(&self.cursor.module_id)?;
-        let qualified_name = format!("{}.{}", module.id, value_name);
+        let qualified_name = Symbol::from_parts(&module.id, value_name);
 
         if let Some(definition) = module.definitions.get(qualified_name.as_str()) {
             return Some(self.resolve_definition_value_type(definition));
@@ -424,7 +357,7 @@ impl<'r, 's> Checker<'r, 's> {
 
         for imported_module_id in &self.imports.unprefixed_imports {
             if let Some(imported_module) = self.store.get_module(imported_module_id) {
-                let qualified_name = format!("{}.{}", imported_module_id, value_name);
+                let qualified_name = Symbol::from_parts(imported_module_id, value_name);
                 if let Some(definition) = imported_module.definitions.get(qualified_name.as_str()) {
                     return Some(self.resolve_definition_value_type(definition));
                 }
@@ -435,7 +368,7 @@ impl<'r, 's> Checker<'r, 's> {
     }
 
     pub(crate) fn is_enum_type(&self, ty: &Type) -> bool {
-        let Type::Constructor { id, .. } = ty else {
+        let Type::Nominal { id, .. } = ty else {
             return false;
         };
         let Some(definition) = self.store.get_definition(id) else {
@@ -473,29 +406,35 @@ impl<'r, 's> Checker<'r, 's> {
                 .get_methods_from_bounds(&qualified_name, &trait_bounds);
         }
 
-        let resolved = ty.strip_refs().resolve();
-        let Type::Constructor { id, .. } = &resolved else {
-            return MethodSignatures::default();
+        let resolved = ty.strip_refs().resolve_in(&self.env);
+        let cache_key: EcoString = match &resolved {
+            Type::Nominal { id, .. } => id.as_eco().clone(),
+            Type::Compound { kind, .. } => format!("prelude.{}", kind.leaf_name()).into(),
+            Type::Simple(kind) => format!("prelude.{}", kind.leaf_name()).into(),
+            _ => return MethodSignatures::default(),
         };
 
         // Interfaces need type-arg-dependent generic substitution, skip cache.
         let peeled = self.store.peel_alias(&resolved);
-        if let Type::Constructor { id: peeled_id, .. } = &peeled
+        if let Type::Nominal { id: peeled_id, .. } = &peeled
             && self.store.get_interface(peeled_id).is_some()
         {
             let empty = HashMap::default();
             return self.store.get_all_methods(&peeled, &empty);
         }
 
-        if let Some(cached) = self.method_cache.borrow().get(id.as_str()) {
+        if let Some(cached) = self.method_cache.borrow().get(cache_key.as_str()) {
             return cached.clone();
         }
 
         let empty = HashMap::default();
-        let methods = self.store.get_all_methods(ty, &empty);
+        // Pass the env-resolved type so the store's env-less `resolve()` stays
+        // identity-safe: `Type::Var` chains are chased once here rather than
+        // silently returning empty methods in the store.
+        let methods = self.store.get_all_methods(&resolved, &empty);
         self.method_cache
             .borrow_mut()
-            .insert(id.clone(), methods.clone());
+            .insert(cache_key, methods.clone());
         methods
     }
 
@@ -629,11 +568,7 @@ impl<'r, 's> Checker<'r, 's> {
             })
             .collect();
 
-        let ty = Type::Constructor {
-            id: format!("@import/{}", imported_module_id).into(),
-            params: vec![],
-            underlying_ty: None,
-        };
+        let ty = Type::ImportNamespace(imported_module_id.clone().into());
 
         self.imports
             .imported_modules
@@ -644,36 +579,15 @@ impl<'r, 's> Checker<'r, 's> {
     }
 
     /// Run a closure speculatively: if it returns `Err`, all type variable
-    /// mutations performed during the closure are rolled back.
+    /// bindings performed during the closure are rolled back.
     pub(crate) fn speculatively<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
-        let prev_log = self.inference.undo_log.take();
-        self.inference.undo_log = Some(Vec::new());
+        let spec = self.env.begin_speculation();
         let result = f(self);
-        let log = self.inference.undo_log.take().unwrap();
-        self.inference.undo_log = prev_log;
-        if result.is_err() {
-            for (type_var, original_state) in log.into_iter().rev() {
-                *type_var.borrow_mut() = original_state;
-            }
-        } else if let Some(parent_log) = &mut self.inference.undo_log {
-            parent_log.extend(log);
-        }
+        self.env.end_speculation(spec, result.is_err());
         result
-    }
-
-    pub(crate) fn set_inferring_assignment_target(&mut self) {
-        self.inference.inferring_assignment_target = true;
-    }
-
-    pub(crate) fn clear_inferring_assignment_target(&mut self) {
-        self.inference.inferring_assignment_target = false;
-    }
-
-    pub(crate) fn is_inferring_assignment_target(&self) -> bool {
-        self.inference.inferring_assignment_target
     }
 }
 

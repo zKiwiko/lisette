@@ -73,13 +73,13 @@ impl Emitter<'_> {
         if make_fn.is_none() {
             let enum_id = match ty {
                 Type::Function { return_type, .. } => {
-                    if let Type::Constructor { id, .. } = return_type.as_ref() {
+                    if let Type::Nominal { id, .. } = return_type.as_ref() {
                         Some(id.as_str())
                     } else {
                         None
                     }
                 }
-                Type::Constructor { id, .. } => Some(id.as_str()),
+                Type::Nominal { id, .. } => Some(id.as_str()),
                 _ => None,
             };
 
@@ -94,7 +94,7 @@ impl Emitter<'_> {
             let name = make_fn_value.clone();
 
             match ty {
-                Type::Constructor { params, .. } => {
+                Type::Nominal { params, .. } => {
                     let slot_ty = self.current_slot_expected_ty.clone();
                     let type_args = slot_ty
                         .as_ref()
@@ -108,7 +108,7 @@ impl Emitter<'_> {
                     return_type,
                     ..
                 } => {
-                    if let Type::Constructor {
+                    if let Type::Nominal {
                         params: ret_params, ..
                     } = return_type.as_ref()
                     {
@@ -131,12 +131,9 @@ impl Emitter<'_> {
     fn constructor_fn_type_args(&mut self, fn_params: &[Type], ret_params: &[Type]) -> String {
         let needs_type_args = !self.emitting_call_callee
             || ret_params.len() > fn_params.len()
-            || !ret_params.iter().all(|rp| {
-                let resolved_rp = rp.resolve();
-                fn_params
-                    .iter()
-                    .any(|fp| fp.resolve().contains_type(&resolved_rp))
-            });
+            || !ret_params
+                .iter()
+                .all(|rp| fn_params.iter().any(|fp| fp.contains_type(rp)));
         if needs_type_args {
             self.format_type_args(ret_params)
         } else {
@@ -250,7 +247,8 @@ impl Emitter<'_> {
         let qualified_name = format!("{}.{}", self.current_module, real_type_part);
         let first = fn_params.first()?;
         let stripped = first.strip_refs();
-        let is_self = matches!(stripped, Type::Constructor { ref id, .. } if *id == qualified_name);
+        let is_self =
+            matches!(stripped, Type::Nominal { ref id, .. } if id.as_str() == qualified_name);
         if !is_self {
             return None;
         }
@@ -280,7 +278,7 @@ impl Emitter<'_> {
             go_name::escape_keyword(method_part).into_owned()
         };
 
-        let type_args = if let Type::Constructor { ref params, .. } = stripped {
+        let type_args = if let Type::Nominal { ref params, .. } = stripped {
             if params.is_empty() {
                 String::new()
             } else {
@@ -347,7 +345,7 @@ impl Emitter<'_> {
             return None;
         }
 
-        let Type::Constructor { id: enum_id, .. } = ty else {
+        let Type::Nominal { id: enum_id, .. } = ty else {
             return None;
         };
 

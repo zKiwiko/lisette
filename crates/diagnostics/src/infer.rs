@@ -435,7 +435,7 @@ pub fn generics_arity_mismatch(
 ) -> LisetteDiagnostic {
     let expected: Vec<Type> = expected_generic_params
         .iter()
-        .map(|param| Type::nominal(param))
+        .map(|param| Type::Parameter(param.as_str().into()))
         .collect();
 
     let expected_str = expected
@@ -630,8 +630,8 @@ pub fn binary_operator_type_mismatch(
     let label_msg = format!(
         "cannot {} `{}` and `{}`",
         operator_verb(operator),
-        left_ty.resolve(),
-        right_ty.resolve()
+        left_ty,
+        right_ty
     );
 
     LisetteDiagnostic::error("Type mismatch")

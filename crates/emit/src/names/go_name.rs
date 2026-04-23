@@ -13,10 +13,6 @@ pub(crate) const PRELUDE_MODULE: &str = "prelude";
 
 pub(crate) const PRELUDE_PREFIX: &str = "prelude.";
 
-pub(crate) const IMPORT_PREFIX: &str = "@import/";
-
-pub(crate) const IMPORT_GO_PREFIX: &str = "@import/go:";
-
 pub(crate) const GO_STDLIB_PKG: &str = "lisette";
 
 pub const PRELUDE_IMPORT_PATH: &str = "github.com/ivov/lisette/prelude";
@@ -157,7 +153,7 @@ pub(crate) fn variant(
     current_module: &str,
     module_alias: Option<&str>,
 ) -> ResolvedName {
-    let Type::Constructor { id, .. } = ty else {
+    let Type::Nominal { id, .. } = ty else {
         return ResolvedName::local(identifier.replace('.', "_"));
     };
 

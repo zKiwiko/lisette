@@ -3,7 +3,7 @@ use std::cell::Cell;
 
 use syntax::ast::{EnumVariant, Expression, StructFieldDefinition};
 use syntax::program::{Definition, File, Interface, MethodSignatures, Module, ModuleId};
-use syntax::types::{SubstitutionMap, Type, substitute};
+use syntax::types::{SubstitutionMap, Symbol, Type, substitute};
 
 pub const ENTRY_MODULE_ID: &str = "_entry_";
 pub const ENTRY_FILE_ID: u32 = 0;
@@ -184,16 +184,47 @@ impl Store {
         best
     }
 
-    pub fn get_enum_variants(&self, qualified_name: &str) -> Option<&[EnumVariant]> {
+    pub fn variants_of(&self, qualified_name: &str) -> Option<&[EnumVariant]> {
         match self.get_definition(qualified_name)? {
             Definition::Enum { variants, .. } => Some(variants),
             _ => None,
         }
     }
 
-    pub fn get_struct_fields(&self, qualified_name: &str) -> Option<&[StructFieldDefinition]> {
+    pub fn value_variants_of(
+        &self,
+        qualified_name: &str,
+    ) -> Option<&[syntax::ast::ValueEnumVariant]> {
+        match self.get_definition(qualified_name)? {
+            Definition::ValueEnum { variants, .. } => Some(variants),
+            _ => None,
+        }
+    }
+
+    pub fn fields_of(&self, qualified_name: &str) -> Option<&[StructFieldDefinition]> {
         match self.get_definition(qualified_name)? {
             Definition::Struct { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
+
+    pub fn struct_kind(&self, qualified_name: &str) -> Option<syntax::ast::StructKind> {
+        match self.get_definition(qualified_name)? {
+            Definition::Struct { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    pub fn struct_constructor(&self, qualified_name: &str) -> Option<&Type> {
+        match self.get_definition(qualified_name)? {
+            Definition::Struct { constructor, .. } => constructor.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn parent_interfaces_of(&self, qualified_name: &str) -> Option<&[Type]> {
+        match self.get_definition(qualified_name)? {
+            Definition::Interface { definition, .. } => Some(&definition.parents),
             _ => None,
         }
     }
@@ -212,7 +243,7 @@ impl Store {
 
     pub fn peel_alias(&self, ty: &Type) -> Type {
         let mut current = ty.clone();
-        while let Type::Constructor {
+        while let Type::Nominal {
             id,
             underlying_ty: Some(u),
             ..
@@ -242,12 +273,12 @@ impl Store {
     pub fn get_all_methods(
         &self,
         ty: &Type,
-        trait_bounds: &HashMap<String, Vec<Type>>,
+        trait_bounds: &HashMap<Symbol, Vec<Type>>,
     ) -> MethodSignatures {
-        let Type::Constructor { id, .. } = ty.strip_refs().resolve() else {
+        let stripped = ty.strip_refs();
+        let Some(qualified_name) = method_lookup_key(&stripped) else {
             return MethodSignatures::default();
         };
-        let qualified_name = id;
 
         if let Some(interface) = self.get_interface(&qualified_name) {
             let mut all_interface_methods = MethodSignatures::default();
@@ -274,7 +305,7 @@ impl Store {
             return all_interface_methods;
         }
 
-        if let Some(bound_types) = trait_bounds.get(qualified_name.as_str()) {
+        if let Some(bound_types) = trait_bounds.get(&qualified_name) {
             return bound_types
                 .iter()
                 .flat_map(|interface_ty| self.get_all_methods(interface_ty, trait_bounds))
@@ -294,8 +325,17 @@ impl Store {
                 Type::Forall { body, .. } => body.as_ref(),
                 other => other,
             };
-            if let Type::Constructor { id: alias_id, .. } = underlying
-                && alias_id.as_str() != qualified_name.as_str()
+            let underlying_key = match underlying {
+                Type::Nominal { id, .. } => Some(id.as_str().to_string()),
+                Type::Simple(kind) => Some(format!("prelude.{}", kind.leaf_name())),
+                Type::Compound { kind, .. } => Some(format!("prelude.{}", kind.leaf_name())),
+                _ => None,
+            };
+            // Follow only when the alias body names a different type. For
+            // opaque prelude natives (e.g. `type Map<K, V>`) the body points
+            // to itself — following would loop.
+            if let Some(k) = underlying_key
+                && k != qualified_name.as_str()
             {
                 let alias_ty = alias_ty.clone();
                 for (name, method_ty) in self.get_all_methods(&alias_ty, trait_bounds) {
@@ -310,7 +350,7 @@ impl Store {
     pub fn get_methods_from_bounds(
         &self,
         qualified_name: &str,
-        trait_bounds: &HashMap<String, Vec<Type>>,
+        trait_bounds: &HashMap<Symbol, Vec<Type>>,
     ) -> MethodSignatures {
         if let Some(bound_types) = trait_bounds.get(qualified_name) {
             return bound_types
@@ -319,5 +359,17 @@ impl Store {
                 .collect();
         }
         MethodSignatures::default()
+    }
+}
+
+/// Return the qualified name used to look up methods/fields for a given type.
+/// For `Type::Compound` and `Type::Simple`, this is the prelude-qualified name
+/// (e.g. `Type::Compound { Slice, .. }` → `"prelude.Slice"`).
+fn method_lookup_key(ty: &Type) -> Option<Symbol> {
+    match ty {
+        Type::Nominal { id, .. } => Some(id.clone()),
+        Type::Compound { kind, .. } => Some(Symbol::from_parts("prelude", kind.leaf_name())),
+        Type::Simple(kind) => Some(Symbol::from_parts("prelude", kind.leaf_name())),
+        _ => None,
     }
 }

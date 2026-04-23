@@ -1,3 +1,4 @@
+use crate::checker::EnvResolve;
 use diagnostics::infer::InterfaceViolation;
 use syntax::ast::Span;
 use syntax::program::{Definition, Interface, MethodSignatures};
@@ -17,21 +18,21 @@ impl Checker<'_, '_> {
         // If we're already checking if this type satisfies this interface, return success
         // to prevent infinite recursion (e.g., interface Fluent { fn next() -> Fluent }).
         let type_id = ty
-            .resolve()
+            .resolve_in(&self.env)
             .get_qualified_id()
             .map(String::from)
             .unwrap_or_else(|| ty.to_string());
         let interface_id = interface.name.to_string();
         let pair = (type_id, interface_id);
 
-        if !self.inference.satisfying_stack.insert(pair.clone()) {
+        if !self.satisfying_stack.insert(pair.clone()) {
             return Ok(());
         }
 
         let mut violations = Vec::new();
         self.collect_interface_violations(ty, interface, type_args, None, span, &mut violations);
 
-        self.inference.satisfying_stack.remove(&pair);
+        self.satisfying_stack.remove(&pair);
 
         if violations.is_empty() {
             Ok(())
@@ -131,7 +132,7 @@ impl Checker<'_, '_> {
         let mut incompatible: Vec<(String, Type, Type)> = Vec::new();
 
         let struct_generics: Option<Vec<String>> =
-            if let Type::Constructor { id, .. } = ty.strip_refs().resolve() {
+            if let Type::Nominal { id, .. } = ty.strip_refs().resolve_in(&self.env) {
                 self.store
                     .get_definition(&id)
                     .and_then(|definition| match definition {
@@ -201,7 +202,7 @@ impl Checker<'_, '_> {
             // Incrementing type_param_depth disables interface coercion in unify_constructors.
             // Wrap in speculatively() so that if this method's unification fails,
             // its type variable links are rolled back instead of leaking.
-            self.inference.type_param_depth += 1;
+            self.scopes.increment_type_param_depth();
             let sig_match = self.speculatively(|this| {
                 this.try_unify(
                     &strip_bounds(&substituted_method),
@@ -209,7 +210,7 @@ impl Checker<'_, '_> {
                     &Span::dummy(),
                 )
             });
-            self.inference.type_param_depth -= 1;
+            self.scopes.decrement_type_param_depth();
 
             if sig_match.is_err() {
                 incompatible.push((
@@ -217,7 +218,7 @@ impl Checker<'_, '_> {
                     substituted_method,
                     impl_method_without_receiver.clone(),
                 ));
-            } else if let Type::Constructor { id, .. } = ty.strip_refs().resolve() {
+            } else if let Type::Nominal { id, .. } = ty.strip_refs().resolve_in(&self.env) {
                 let parts: Vec<&str> = id.split('.').collect();
                 if parts.len() == 2 {
                     self.facts.mark_method_used_for_interface(

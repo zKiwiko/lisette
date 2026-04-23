@@ -1,9 +1,9 @@
+use crate::checker::EnvResolve;
 use syntax::ast::BindingKind;
 use syntax::ast::{Binding, Expression, MatchArm, MatchOrigin, Pattern, Span};
 use syntax::types::Type;
 
 use super::super::Checker;
-use super::super::checks::{check_binding_pattern, reject_as_binding_in_irrefutable_context};
 
 /// Result of reconciling branch types. `Widened` means the common type is a
 /// later branch's type (a supertype of the first), not the first branch's type.
@@ -61,12 +61,12 @@ impl Checker<'_, '_> {
                 self.sink
                     .push(diagnostics::infer::cannot_match_on_unknown(*span));
             }
-            Type::Constructor { .. } => {}
+            Type::Nominal { .. } => {}
             Type::Function { .. } => {
                 self.sink
                     .push(diagnostics::infer::cannot_match_on_functions(*span));
             }
-            Type::Variable(_) => {
+            Type::Var { .. } => {
                 self.sink
                     .push(diagnostics::infer::cannot_match_on_unconstrained_type(
                         *span,
@@ -78,6 +78,9 @@ impl Checker<'_, '_> {
             Type::Parameter(_) => {}
             Type::Tuple(_) => {}
             Type::Never | Type::Error => {}
+            Type::ImportNamespace(_) => {}
+            Type::ReceiverPlaceholder => {}
+            Type::Simple(_) | Type::Compound { .. } => {}
         }
     }
 
@@ -129,7 +132,7 @@ impl Checker<'_, '_> {
         // interface from a return type annotation), use a shared type variable
         // (like match does) so both branches can satisfy interface constraints.
         let expected_is_concrete =
-            is_expression && !has_no_else && !expected_ty.resolve().is_variable();
+            is_expression && !has_no_else && !expected_ty.resolve_in(&self.env).is_variable();
 
         if expected_is_concrete {
             self.unify(&consequence_ty, expected_ty, &span);
@@ -137,12 +140,11 @@ impl Checker<'_, '_> {
         }
 
         // Branch bodies are tail-like contexts where Never calls are valid.
-        let saved_subexpression = self.inference.in_subexpression;
-        self.inference.in_subexpression = false;
+        let saved_subexpression = self.scopes.set_in_subexpression(false);
         let new_consequence = self.infer_expression(*consequence, &consequence_ty);
-        self.inference.in_subexpression = false;
+        self.scopes.set_in_subexpression(false);
         let new_alternative = self.infer_expression(*alternative, &alternative_ty);
-        self.inference.in_subexpression = saved_subexpression;
+        self.scopes.set_in_subexpression(saved_subexpression);
 
         if has_no_else {
             // An `if` without `else` always has type () (unit), like Rust.
@@ -154,8 +156,8 @@ impl Checker<'_, '_> {
             let consequence_span = new_consequence.get_span();
             let alternative_span = new_alternative.get_span();
 
-            let resolved_consequence = consequence_ty.resolve();
-            let resolved_alternative = alternative_ty.resolve();
+            let resolved_consequence = consequence_ty.resolve_in(&self.env);
+            let resolved_alternative = alternative_ty.resolve_in(&self.env);
 
             match self
                 .reconcile_branch_types(&[consequence_ty.clone(), alternative_ty.clone()], &span)
@@ -182,14 +184,13 @@ impl Checker<'_, '_> {
         let result_ty = if has_no_else {
             self.type_unit()
         } else if is_expression && !expected_is_concrete {
-            expected_ty.resolve()
+            expected_ty.resolve_in(&self.env)
         } else {
             consequence_ty
         };
 
         let bool_ty = self.type_bool();
         let new_condition = self.infer_expression(*condition, &bool_ty);
-        self.check_not_temp_producing(&new_condition);
         if let Some(span) = Self::find_propagate(&new_condition) {
             self.sink
                 .push(diagnostics::infer::propagate_in_condition(span));
@@ -215,7 +216,7 @@ impl Checker<'_, '_> {
         let subject_ty = self.new_type_var();
         let new_subject = self.infer_expression(*subject, &subject_ty);
 
-        let resolved_subject_ty = new_subject.get_type().resolve();
+        let resolved_subject_ty = new_subject.get_type().resolve_in(&self.env);
         self.ensure_subject_matchable(&resolved_subject_ty, &new_subject.get_span());
 
         let is_statement = expected_ty.is_ignored();
@@ -235,14 +236,15 @@ impl Checker<'_, '_> {
             }
         }
 
-        let needs_reconciliation = !arms_independent && result_ty.resolve().is_variable();
+        let needs_reconciliation =
+            !arms_independent && result_ty.resolve_in(&self.env).is_variable();
 
         let new_arms = arms
             .into_iter()
             .map(|a| {
                 self.scopes.push();
 
-                let pattern_ty = subject_ty.resolve();
+                let pattern_ty = subject_ty.resolve_in(&self.env);
                 let (new_pattern, typed_pattern) =
                     self.infer_pattern(a.pattern, pattern_ty, BindingKind::MatchArm);
 
@@ -259,11 +261,11 @@ impl Checker<'_, '_> {
                 } else {
                     &result_ty
                 };
-                let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, true);
+                let saved_in_match_arm = self.scopes.set_in_match_arm(true);
                 // Arm body is a tail-like context where Never calls are valid.
-                self.inference.in_subexpression = false;
+                self.scopes.set_in_subexpression(false);
                 let new_expression = self.infer_expression(*a.expression, arm_expected);
-                self.inference.in_match_arm = saved_in_match_arm;
+                self.scopes.set_in_match_arm(saved_in_match_arm);
 
                 self.scopes.pop();
 
@@ -322,13 +324,13 @@ impl Checker<'_, '_> {
         let prev_break_type = self.scopes.loop_break_type().cloned();
         self.scopes.set_loop_break_type(break_ty.clone());
 
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, false);
-        self.inference.loop_needs_label_stack.push(false);
+        let saved_in_match_arm = self.scopes.set_in_match_arm(false);
+        self.scopes.push_loop_needs_label();
 
         let new_body = self.infer_in_loop_context(|s| s.infer_expression(*body, &Type::ignored()));
 
-        let needs_label = self.inference.loop_needs_label_stack.pop().unwrap();
-        self.inference.in_match_arm = saved_in_match_arm;
+        let needs_label = self.scopes.pop_loop_needs_label();
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         if let Some(prev) = prev_break_type {
             self.scopes.set_loop_break_type(prev);
@@ -366,20 +368,19 @@ impl Checker<'_, '_> {
 
         let bool_ty = self.type_bool();
         let new_condition = self.infer_expression(*condition, &bool_ty);
-        self.check_not_temp_producing(&new_condition);
         if let Some(span) = Self::find_propagate(&new_condition) {
             self.sink
                 .push(diagnostics::infer::propagate_in_condition(span));
         }
 
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, false);
-        self.inference.loop_needs_label_stack.push(false);
+        let saved_in_match_arm = self.scopes.set_in_match_arm(false);
+        self.scopes.push_loop_needs_label();
 
         let new_body =
             self.infer_in_non_value_loop_context(|s| s.infer_expression(*body, &Type::ignored()));
 
-        let needs_label = self.inference.loop_needs_label_stack.pop().unwrap();
-        self.inference.in_match_arm = saved_in_match_arm;
+        let needs_label = self.scopes.pop_loop_needs_label();
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         Expression::While {
             condition: new_condition.into(),
@@ -402,20 +403,26 @@ impl Checker<'_, '_> {
         let scrutinee_ty = self.new_type_var();
         let new_scrutinee = self.infer_expression(*scrutinee, &scrutinee_ty);
 
-        self.ensure_subject_matchable(&scrutinee_ty.resolve(), &new_scrutinee.get_span());
+        self.ensure_subject_matchable(
+            &scrutinee_ty.resolve_in(&self.env),
+            &new_scrutinee.get_span(),
+        );
 
         self.scopes.push();
-        let (new_pattern, typed_pattern) =
-            self.infer_pattern(pattern, scrutinee_ty.resolve(), BindingKind::MatchArm);
+        let (new_pattern, typed_pattern) = self.infer_pattern(
+            pattern,
+            scrutinee_ty.resolve_in(&self.env),
+            BindingKind::MatchArm,
+        );
 
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, false);
-        self.inference.loop_needs_label_stack.push(false);
+        let saved_in_match_arm = self.scopes.set_in_match_arm(false);
+        self.scopes.push_loop_needs_label();
 
         let new_body =
             self.infer_in_non_value_loop_context(|s| s.infer_expression(*body, &Type::ignored()));
 
-        let needs_label = self.inference.loop_needs_label_stack.pop().unwrap();
-        self.inference.in_match_arm = saved_in_match_arm;
+        let needs_label = self.scopes.pop_loop_needs_label();
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         self.scopes.pop();
 
@@ -442,7 +449,7 @@ impl Checker<'_, '_> {
         let iterable_ty = self.new_type_var();
         let new_iterable = self.infer_expression(*iterable, &iterable_ty);
 
-        let resolved_iterable_ty = self.store.peel_alias(&iterable_ty.resolve());
+        let resolved_iterable_ty = self.store.peel_alias(&iterable_ty.resolve_in(&self.env));
 
         let iterable_ty_name = match resolved_iterable_ty.get_name() {
             Some(name) => name,
@@ -516,15 +523,11 @@ impl Checker<'_, '_> {
         // Push a new scope so the loop variable doesn't shadow outer bindings
         self.scopes.push();
 
-        reject_as_binding_in_irrefutable_context(self.sink, &binding.pattern);
-
         let (inferred_pattern, typed_pattern) = self.infer_pattern(
             binding.pattern,
             element_ty.clone(),
             BindingKind::Let { mutable: false },
         );
-
-        check_binding_pattern(self.sink, &inferred_pattern);
 
         let new_binding = Binding {
             pattern: inferred_pattern,
@@ -549,14 +552,14 @@ impl Checker<'_, '_> {
             }
         }
 
-        let saved_in_match_arm = std::mem::replace(&mut self.inference.in_match_arm, false);
-        self.inference.loop_needs_label_stack.push(false);
+        let saved_in_match_arm = self.scopes.set_in_match_arm(false);
+        self.scopes.push_loop_needs_label();
 
         let new_body =
             self.infer_in_non_value_loop_context(|s| s.infer_expression(*body, &Type::ignored()));
 
-        let needs_label = self.inference.loop_needs_label_stack.pop().unwrap();
-        self.inference.in_match_arm = saved_in_match_arm;
+        let needs_label = self.scopes.pop_loop_needs_label();
+        self.scopes.set_in_match_arm(saved_in_match_arm);
 
         self.scopes.pop();
 
@@ -601,7 +604,7 @@ impl Checker<'_, '_> {
             }
             _ => {}
         }
-        self.inference.in_subexpression = false;
+        self.scopes.set_in_subexpression(false);
         self.infer_return(expression, span)
     }
 
@@ -738,10 +741,8 @@ impl Checker<'_, '_> {
     }
 
     fn mark_loop_needs_label_in_match_arm(&mut self) {
-        if self.inference.in_match_arm
-            && let Some(flag) = self.inference.loop_needs_label_stack.last_mut()
-        {
-            *flag = true;
+        if self.scopes.is_in_match_arm() {
+            self.scopes.mark_current_loop_needs_label();
         }
     }
 

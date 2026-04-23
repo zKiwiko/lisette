@@ -3,7 +3,7 @@ use crate::names::go_name;
 use crate::types::native::NativeGoType;
 use crate::types::prelude::PreludeType;
 use syntax::ast::Annotation;
-use syntax::types::{Type, TypeVariableState};
+use syntax::types::Type;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GoType {
@@ -58,22 +58,75 @@ impl std::fmt::Display for GoType {
 impl Emitter<'_> {
     pub(crate) fn go_type(&self, ty: &Type) -> GoType {
         match ty {
-            Type::Constructor { id, params, .. } => self.emit_constructor(id, params, ty),
+            Type::Nominal { id, params, .. } => self.emit_constructor(id, params, ty),
+            Type::Simple(kind) => {
+                if matches!(kind, syntax::types::SimpleKind::Unit) {
+                    GoType::new("struct{}")
+                } else {
+                    GoType::new(kind.leaf_name().to_string())
+                }
+            }
+            Type::Compound { kind, args } => self.emit_compound(*kind, args, ty),
             Type::Function {
                 params,
                 return_type,
                 ..
             } => self.emit_function_type(params, return_type),
-            Type::Variable(var) => match &*var.borrow() {
-                TypeVariableState::Link(ty) => self.go_type(ty),
-                TypeVariableState::Unbound { .. } => GoType::new("any"),
-            },
+            Type::Var { .. } => GoType::new("any"),
             Type::Forall { .. } => GoType::new("any"),
             Type::Parameter(name) => GoType::new(name.to_string()),
             Type::Never => GoType::new("struct{}"),
             Type::Error => unreachable!("Type::Error should not reach the emitter"),
             Type::Tuple(elements) => self.emit_tuple_type(elements),
+            Type::ImportNamespace(_) => {
+                unreachable!("Type::ImportNamespace should not reach the emitter's go_type")
+            }
+            Type::ReceiverPlaceholder => GoType::new("any"),
         }
+    }
+
+    fn emit_compound(&self, kind: syntax::types::CompoundKind, args: &[Type], ty: &Type) -> GoType {
+        use syntax::types::CompoundKind;
+
+        if kind == CompoundKind::Ref
+            && let Some(inner) = args.first()
+        {
+            let inner_type = self.go_type(inner);
+            let mut result = GoType::new(format!("*{}", inner_type.code));
+            result.merge(&inner_type);
+            return result;
+        }
+
+        if let Some(native) = NativeGoType::from_type(ty) {
+            return self.emit_native_type(native, ty);
+        }
+
+        let param_types: Vec<GoType> = args.iter().map(|p| self.go_type(p)).collect();
+        let type_args = param_types
+            .iter()
+            .map(|t| t.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if kind == CompoundKind::EnumeratedSlice {
+            let mut result = GoType::new(format!("[]{}", type_args));
+            result.merge_all(&param_types);
+            return result;
+        }
+
+        if kind == CompoundKind::VarArgs {
+            let mut result = GoType::new(format!("...{}", type_args));
+            result.merge_all(&param_types);
+            return result;
+        }
+
+        if args.is_empty() {
+            return GoType::new(kind.leaf_name().to_string());
+        }
+
+        let mut result = GoType::new(format!("{}[{}]", kind.leaf_name(), type_args));
+        result.merge_all(&param_types);
+        result
     }
 
     pub(crate) fn go_type_as_string(&mut self, ty: &Type) -> String {
@@ -291,8 +344,9 @@ impl Emitter<'_> {
         type_args: &[Annotation],
     ) -> String {
         let mut go_type_strs = Vec::new();
-        if let Type::Constructor { params, .. } = receiver_ty {
-            for param in params {
+        if let Some(params) = receiver_ty.get_type_params() {
+            let params = params.to_vec();
+            for param in &params {
                 go_type_strs.push(self.go_type_as_string(param));
             }
         }

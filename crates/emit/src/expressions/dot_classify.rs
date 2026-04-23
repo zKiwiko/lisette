@@ -12,10 +12,10 @@ impl Emitter<'_> {
         member: &str,
     ) -> Option<String> {
         let expression_ty = expression.get_type();
-        let enum_id = match expression_ty.resolve() {
-            Type::Constructor { id, .. } => id.clone(),
+        let enum_id = match expression_ty.unwrap_forall() {
+            Type::Nominal { id, .. } => id.clone(),
             Type::Function { return_type, .. } => {
-                if let Type::Constructor { id, .. } = return_type.as_ref() {
+                if let Type::Nominal { id, .. } = return_type.as_ref() {
                     id.clone()
                 } else {
                     return None;
@@ -90,7 +90,7 @@ impl Emitter<'_> {
             return None;
         };
 
-        let Type::Constructor {
+        let Type::Nominal {
             id: enum_id,
             params: ret_params,
             ..
@@ -137,11 +137,11 @@ impl Emitter<'_> {
         variant_name: &str,
         result_ty: &Type,
     ) -> Option<String> {
-        let Type::Constructor {
+        let Type::Nominal {
             id: enum_id,
             params,
             ..
-        } = result_ty.resolve()
+        } = result_ty
         else {
             return None;
         };
@@ -167,7 +167,7 @@ impl Emitter<'_> {
         let enum_name = enum_id.split('.').next_back()?;
         let key = format!("{}.{}", enum_name, variant_name);
         let make_fn = self.module.make_functions.get(&key)?.clone();
-        let type_args = self.format_type_args(&params);
+        let type_args = self.format_type_args(params);
 
         if is_prelude {
             let resolved = go_name::resolve(&make_fn);
@@ -193,7 +193,7 @@ impl Emitter<'_> {
         variant_name: &str,
         result_ty: &Type,
     ) -> Option<String> {
-        let Type::Constructor {
+        let Type::Nominal {
             id: enum_id,
             params,
             ..
@@ -222,14 +222,8 @@ impl Emitter<'_> {
         };
 
         let inner_ty = inner_expression.get_type();
-        let Type::Constructor { id: import_id, .. } = inner_ty.resolve() else {
-            return None;
-        };
-        if !import_id.starts_with(go_name::IMPORT_PREFIX) {
-            return None;
-        }
-
-        let alias_module = import_id.strip_prefix(go_name::IMPORT_PREFIX)?;
+        let alias_module = inner_ty.as_import_namespace()?.to_string();
+        let alias_module = alias_module.as_str();
 
         let enum_module = enum_id.split('.').next()?;
 
@@ -307,19 +301,24 @@ impl Emitter<'_> {
         };
 
         let inner_ty = inner_expression.get_type();
-        let Type::Constructor { id, .. } = inner_ty.resolve() else {
-            return None;
-        };
 
-        let module_name = if let Some(synthetic_module) = id.strip_prefix(go_name::IMPORT_PREFIX) {
-            synthetic_module
-        } else if let Expression::Identifier { value, .. } = inner_expression.as_ref() {
-            value.as_str()
-        } else {
-            return None;
-        };
+        let (module_name, id_for_prelude_check) =
+            if let Some(synthetic_module) = inner_ty.as_import_namespace() {
+                (synthetic_module.to_string(), synthetic_module.to_string())
+            } else if let Type::Nominal { id, .. } = &inner_ty {
+                let module_name =
+                    if let Expression::Identifier { value, .. } = inner_expression.as_ref() {
+                        value.to_string()
+                    } else {
+                        return None;
+                    };
+                (module_name, id.to_string())
+            } else {
+                return None;
+            };
+        let module_name = module_name.as_str();
 
-        let is_prelude = id.starts_with(go_name::PRELUDE_PREFIX);
+        let is_prelude = id_for_prelude_check.starts_with(go_name::PRELUDE_PREFIX);
         let go_method = if is_exported {
             if is_prelude {
                 go_name::snake_to_camel(member)
@@ -337,8 +336,8 @@ impl Emitter<'_> {
         let type_args = if let Type::Function { params, .. } = result_ty.unwrap_forall()
             && let Some(first_param) = params.first()
         {
-            let receiver_ty = first_param.resolve().strip_refs();
-            if let Type::Constructor {
+            let receiver_ty = first_param.strip_refs();
+            if let Type::Nominal {
                 params: receiver_params,
                 ..
             } = receiver_ty
@@ -389,17 +388,19 @@ impl Emitter<'_> {
         };
 
         let inner_ty = inner_expression.get_type();
-        let Type::Constructor { id, .. } = inner_ty.resolve() else {
-            return None;
-        };
 
-        let module_name = if let Some(synthetic_module) = id.strip_prefix(go_name::IMPORT_PREFIX) {
-            synthetic_module
-        } else if let Expression::Identifier { value, .. } = inner_expression.as_ref() {
-            value.as_str()
+        let module_name = if let Some(synthetic_module) = inner_ty.as_import_namespace() {
+            synthetic_module.to_string()
+        } else if matches!(inner_ty, Type::Nominal { .. }) {
+            if let Expression::Identifier { value, .. } = inner_expression.as_ref() {
+                value.to_string()
+            } else {
+                return None;
+            }
         } else {
             return None;
         };
+        let module_name = module_name.as_str();
 
         let qualified_type = format!("{}.{}", module_name, type_name);
         let definition = self.ctx.definitions.get(qualified_type.as_str())?;

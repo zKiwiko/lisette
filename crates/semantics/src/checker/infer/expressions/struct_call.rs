@@ -1,5 +1,6 @@
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::checker::EnvResolve;
 use ecow::EcoString;
 use syntax::ast::{Expression, Span, StructFieldAssignment};
 use syntax::program::Definition;
@@ -53,7 +54,7 @@ impl Checker<'_, '_> {
                 Type::Forall { body, .. } => body.as_ref().clone(),
                 _ => alias_ty.clone(),
             };
-            if let Type::Constructor { id: struct_id, .. } = &underlying
+            if let Type::Nominal { id: struct_id, .. } = &underlying
                 && let Some(Definition::Struct {
                     ty: struct_ty,
                     fields: struct_fields,
@@ -100,8 +101,8 @@ impl Checker<'_, '_> {
                 Type::Forall { body, .. } => body.as_ref().clone(),
                 _ => alias_ty.clone(),
             };
-            let variant_fields = if let Type::Constructor { id: enum_id, .. } = &underlying
-                && let Some(Definition::Enum { variants, .. }) = self.store.get_definition(enum_id)
+            let variant_fields = if let Type::Nominal { id: enum_id, .. } = &underlying
+                && let Some(variants) = self.store.variants_of(enum_id)
                 && let Some(variant) = variants.iter().find(|v| v.name == variant_name)
                 && variant.fields.is_struct()
             {
@@ -134,7 +135,7 @@ impl Checker<'_, '_> {
 
             let pattern_ty = match value_constructor_type {
                 Type::Function { return_type, .. } => *return_type,
-                Type::Constructor { .. } => value_constructor_type,
+                Type::Nominal { .. } => value_constructor_type,
                 _ => {
                     self.sink
                         .push(diagnostics::infer::struct_not_found(&struct_name, span));
@@ -149,11 +150,11 @@ impl Checker<'_, '_> {
                 }
             };
 
-            let resolved_ty = pattern_ty.resolve();
+            let resolved_ty = pattern_ty.resolve_in(&self.env);
             let variant_name = struct_name.split('.').next_back().unwrap_or(&struct_name);
 
-            if let Type::Constructor { id, .. } = &resolved_ty
-                && let Some(Definition::Enum { variants, .. }) = self.store.get_definition(id)
+            if let Type::Nominal { id, .. } = &resolved_ty
+                && let Some(variants) = self.store.variants_of(id)
                 && let Some(variant) = variants.iter().find(|v| v.name == variant_name)
                 && variant.fields.is_struct()
             {
@@ -242,8 +243,6 @@ impl Checker<'_, '_> {
 
                 let new_value = self
                     .with_value_context(|s| s.infer_expression((*field.value).clone(), &field_ty));
-
-                self.check_not_temp_producing(&new_value);
 
                 StructFieldAssignment {
                     name: field.name.clone(),
@@ -338,8 +337,6 @@ impl Checker<'_, '_> {
 
                 let new_value = self
                     .with_value_context(|s| s.infer_expression((*field.value).clone(), &field_ty));
-
-                self.check_not_temp_producing(&new_value);
 
                 StructFieldAssignment {
                     name: field.name.clone(),

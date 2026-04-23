@@ -1,7 +1,6 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use diagnostics::{DiagnosticSink, LisetteDiagnostic};
-use ecow::EcoString;
 use semantics::{checker::Checker, pattern_analysis, store::Store};
 use stdlib::get_go_stdlib_typedef;
 use syntax::{
@@ -13,6 +12,7 @@ use syntax::{
         CoercionInfo, Definition, File, FileImport, MutationInfo, ResolutionInfo, UnusedInfo,
         Visibility,
     },
+    types::Symbol,
 };
 
 use super::init_prelude;
@@ -180,14 +180,27 @@ impl CompiledTest {
                 }
             }
 
-            checker.run_post_inference_checks();
-            semantics::checker::infer::checks::check_interface_visibility(
-                checker.store,
-                TEST_MODULE_ID,
-                &sink,
-            );
+            {
+                let folder = semantics::checker::freeze::FreezeFolder::new(&checker.env);
+                folder.freeze_facts(&mut checker.facts);
+            }
+            typed_ast =
+                semantics::checker::freeze::FreezeFolder::new(&checker.env).freeze_items(typed_ast);
 
             if !checker.failed() {
+                let module_id = checker.cursor.module_id.clone();
+                {
+                    let mut ctx = semantics::validators::ValidatorContext {
+                        typed_ast: &typed_ast,
+                        is_typedef: false,
+                        module_id: &module_id,
+                        store: checker.store,
+                        facts: &mut checker.facts,
+                        coercions: &checker.coercions,
+                        sink: checker.sink,
+                    };
+                    semantics::validators::run_all(&mut ctx);
+                }
                 let pattern_ctx = pattern_analysis::Context::new(
                     checker.store,
                     &checker.facts.or_pattern_error_spans,
@@ -221,7 +234,7 @@ impl CompiledTest {
                 }
             }
 
-            let definitions: HashMap<EcoString, Definition> = checker
+            let definitions: HashMap<Symbol, Definition> = checker
                 .store
                 .modules
                 .values()
@@ -275,7 +288,7 @@ impl CompiledTest {
 pub struct InferenceResult {
     pub ast: Vec<Expression>,
     pub errors: Vec<LisetteDiagnostic>,
-    pub definitions: HashMap<EcoString, Definition>,
+    pub definitions: HashMap<Symbol, Definition>,
     pub module_id: String,
     pub unused: UnusedInfo,
     pub mutations: MutationInfo,

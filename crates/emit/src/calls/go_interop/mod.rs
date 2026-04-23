@@ -148,13 +148,11 @@ impl Emitter<'_> {
     fn go_qualified_name(&self, receiver_expression: &Expression, member: &str) -> Option<String> {
         let ty = receiver_expression.get_type();
 
-        if let Type::Constructor { ref id, .. } = ty
-            && let Some(module_path) = id.strip_prefix(go_name::IMPORT_PREFIX)
-        {
+        if let Some(module_path) = ty.as_import_namespace() {
             return Some(format!("{}.{}", module_path, member));
         }
 
-        if let Type::Constructor { id, .. } = ty.resolve().strip_refs()
+        if let Type::Nominal { id, .. } = ty.strip_refs()
             && go_name::is_go_import(&id)
         {
             return Some(format!("{}.{}", id, member));
@@ -166,14 +164,14 @@ impl Emitter<'_> {
     pub(crate) fn is_go_receiver(expression: &Expression) -> bool {
         let ty = expression.get_type();
 
-        if let Type::Constructor { ref id, .. } = ty
-            && id.starts_with(go_name::IMPORT_GO_PREFIX)
+        if let Some(module_id) = ty.as_import_namespace()
+            && module_id.starts_with(go_name::GO_IMPORT_PREFIX)
         {
             return true;
         }
 
         // Check for Go object pattern: type is go:* (possibly wrapped in Ref<>)
-        if let Type::Constructor { id, .. } = ty.resolve().strip_refs()
+        if let Type::Nominal { id, .. } = ty.strip_refs()
             && go_name::is_go_import(&id)
         {
             return true;

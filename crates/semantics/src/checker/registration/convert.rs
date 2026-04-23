@@ -1,5 +1,6 @@
 use rustc_hash::FxHashMap as HashMap;
 
+use crate::checker::EnvResolve;
 use syntax::EcoString;
 use syntax::ast::{Annotation, Generic, Span};
 use syntax::program::Definition;
@@ -123,7 +124,7 @@ impl Checker<'_, '_> {
                     && params.len() == 1
                     && let Some(inner) = resolved_ty.inner()
                 {
-                    let peeled_inner = self.store.peel_alias(&inner.resolve());
+                    let peeled_inner = self.store.peel_alias(&inner.resolve_in(&self.env));
                     if let Some(inner_id) = peeled_inner.get_qualified_id()
                         && self.store.get_interface(inner_id).is_some()
                     {
@@ -145,14 +146,19 @@ impl Checker<'_, '_> {
 
                 // Preserve alias name in emitter output. Guard against re-wrapping bodies whose
                 // id already matches (function aliases are pre-wrapped by populate_type_alias).
-                if let Some(Definition::TypeAlias {
-                    annotation: alias_ann,
-                    ..
-                }) = self.store.get_definition(&qualified_name)
+                let body_differs = match &resolved_ty {
+                    Type::Nominal { id, .. } => id.as_str() != qualified_name.as_str(),
+                    Type::Simple(_) | Type::Compound { .. } => true,
+                    _ => false,
+                };
+                if body_differs
+                    && let Some(Definition::TypeAlias {
+                        annotation: alias_ann,
+                        ..
+                    }) = self.store.get_definition(&qualified_name)
                     && !alias_ann.is_opaque()
-                    && matches!(&resolved_ty, Type::Constructor { id, .. } if id.as_str() != qualified_name.as_str())
                 {
-                    return Type::Constructor {
+                    return Type::Nominal {
                         id: qualified_name.into(),
                         params: concrete_args,
                         underlying_ty: Some(Box::new(resolved_ty)),
@@ -285,7 +291,7 @@ impl Checker<'_, '_> {
     }
 
     fn check_map_key_comparable(&mut self, key_ty: &Type, span: Span) {
-        let resolved = key_ty.resolve();
+        let resolved = key_ty.resolve_in(&self.env);
 
         let reason = match &resolved {
             Type::Function { .. } => Some("functions"),

@@ -1,3 +1,4 @@
+use crate::checker::EnvResolve;
 use syntax::ast::{
     Annotation, EnumFieldDefinition, EnumVariant, Generic, Span, StructFieldDefinition, StructKind,
     ValueEnumVariant, VariantFields,
@@ -7,7 +8,6 @@ use syntax::types::Type;
 
 use super::enum_variant_constructor_type;
 use crate::checker::Checker;
-use syntax::types::TypeVariableState;
 
 impl Checker<'_, '_> {
     pub(super) fn populate_enum(
@@ -57,7 +57,7 @@ impl Checker<'_, '_> {
             .iter()
             .map(|v| {
                 let variant_ty = enum_variant_constructor_type(v, &enum_ty, generics);
-                let qualified_variant_name = format!("{}.{}", qualified_name, v.name);
+                let qualified_variant_name = qualified_name.with_segment(&v.name);
                 let simple_qualified_name = if is_prelude {
                     Some(self.qualify_name(&v.name))
                 } else {
@@ -98,18 +98,18 @@ impl Checker<'_, '_> {
             };
             module
                 .definitions
-                .insert(qualified_variant_name.into(), definition.clone());
+                .insert(qualified_variant_name, definition.clone());
 
             if let Some(simple_qualified_name) = simple_name {
                 module
                     .definitions
-                    .entry(simple_qualified_name.into())
+                    .entry(simple_qualified_name)
                     .or_insert(definition);
             }
         }
 
         module.definitions.insert(
-            qualified_name.clone().into(),
+            qualified_name.clone(),
             Definition::Enum {
                 visibility,
                 ty: enum_ty,
@@ -162,10 +162,10 @@ impl Checker<'_, '_> {
         let underlying_ty =
             underlying_ty.map(|annotation| self.convert_to_type(annotation, name_span));
 
-        let enum_ty = if let (Type::Constructor { id, params, .. }, Some(underlying)) =
+        let enum_ty = if let (Type::Nominal { id, params, .. }, Some(underlying)) =
             (&base_enum_ty, &underlying_ty)
         {
-            Type::Constructor {
+            Type::Nominal {
                 id: id.clone(),
                 params: params.clone(),
                 underlying_ty: Some(Box::new(underlying.clone())),
@@ -175,13 +175,13 @@ impl Checker<'_, '_> {
         };
 
         for variant in variants {
-            let qualified_variant_name = format!("{}.{}", qualified_name, variant.name);
+            let qualified_variant_name = qualified_name.with_segment(&variant.name);
             let module = self
                 .store
                 .get_module_mut(&self.cursor.module_id)
                 .expect("current module must exist in store");
             module.definitions.insert(
-                qualified_variant_name.into(),
+                qualified_variant_name,
                 Definition::Value {
                     visibility: visibility.clone(),
                     ty: enum_ty.clone(),
@@ -209,7 +209,7 @@ impl Checker<'_, '_> {
             .expect("current module must exist in store");
 
         module.definitions.insert(
-            qualified_name.into(),
+            qualified_name,
             Definition::ValueEnum {
                 visibility,
                 ty: enum_ty,
@@ -255,7 +255,7 @@ impl Checker<'_, '_> {
                     format!("{}{}", variant.name, fi)
                 };
 
-                let resolved = field.ty.resolve();
+                let resolved = field.ty.resolve_in(&self.env);
                 let annotation_span = field.annotation.get_span();
                 let span = if !annotation_span.is_dummy() {
                     annotation_span
@@ -263,7 +263,7 @@ impl Checker<'_, '_> {
                     variant.name_span
                 };
                 if let Some(&(v_a, f_a, is_struct_a, ty_a, _)) = seen.get(&go_name) {
-                    if ty_a.resolve() != resolved {
+                    if ty_a.resolve_in(&self.env) != resolved {
                         let loc_a = if is_struct_a {
                             format!("{}.{}.{}", name, v_a, f_a)
                         } else {
@@ -276,7 +276,7 @@ impl Checker<'_, '_> {
                         };
                         self.sink.push(diagnostics::infer::enum_field_type_conflict(
                             &loc_a,
-                            &ty_a.resolve().to_string(),
+                            &ty_a.resolve_in(&self.env).to_string(),
                             &loc_b,
                             &resolved.to_string(),
                             span,
@@ -331,8 +331,8 @@ impl Checker<'_, '_> {
             .iter()
             .map(|f| {
                 let resolved_ty = self.convert_to_type(&f.annotation, span);
-                if let Type::Variable(var) = &f.ty {
-                    *var.borrow_mut() = TypeVariableState::Link(resolved_ty.clone());
+                if let Type::Var { id, .. } = &f.ty {
+                    self.env.bind(*id, resolved_ty.clone());
                 }
                 EnumFieldDefinition {
                     ty: resolved_ty,
@@ -409,7 +409,7 @@ impl Checker<'_, '_> {
         let struct_ty = if kind == StructKind::Tuple && new_fields.len() == 1 && generics.is_empty()
         {
             match struct_ty {
-                Type::Constructor { id, params, .. } => Type::Constructor {
+                Type::Nominal { id, params, .. } => Type::Nominal {
                     id,
                     params,
                     underlying_ty: Some(Box::new(new_fields[0].ty.clone())),
@@ -440,7 +440,7 @@ impl Checker<'_, '_> {
             .expect("current module must exist in store")
             .definitions
             .insert(
-                qualified_name.clone().into(),
+                qualified_name.clone(),
                 Definition::Struct {
                     visibility,
                     ty: struct_ty,
@@ -485,7 +485,7 @@ impl Checker<'_, '_> {
             return false; // Already checked this type
         }
 
-        if let Some(fields) = self.store.get_struct_fields(current_id) {
+        if let Some(fields) = self.store.fields_of(current_id) {
             for field in fields {
                 if self.type_contains_target_without_ref(target_id, &field.ty, visited) {
                     return true;
@@ -497,10 +497,10 @@ impl Checker<'_, '_> {
         // Skip direct self-references (e.g. `Node(Tree, Tree)`) — the emitter wraps
         // those in pointers automatically. Only flag indirect recursion through other
         // types (e.g. `Node(Box<Tree>)` where Box is a value-type struct).
-        if let Some(variants) = self.store.get_enum_variants(current_id) {
+        if let Some(variants) = self.store.variants_of(current_id) {
             for variant in variants {
                 for field in &variant.fields {
-                    if let Type::Constructor { id, .. } = field.ty.resolve()
+                    if let Type::Nominal { id, .. } = field.ty.resolve_in(&self.env)
                         && id == target_id
                     {
                         continue;
@@ -522,7 +522,7 @@ impl Checker<'_, '_> {
         visited: &mut rustc_hash::FxHashSet<String>,
     ) -> bool {
         match ty {
-            Type::Constructor { id, params, .. } => {
+            Type::Nominal { id, params, .. } => {
                 // Ref, Slice, and Map provide heap indirection in Go (pointer,
                 // slice header, map pointer) — don't treat as direct containment.
                 if matches!(
@@ -542,8 +542,7 @@ impl Checker<'_, '_> {
                     }
                 }
 
-                if (self.store.get_struct_fields(id).is_some()
-                    || self.store.get_enum_variants(id).is_some())
+                if (self.store.fields_of(id).is_some() || self.store.variants_of(id).is_some())
                     && self.contains_type_without_ref(target_id, id, visited)
                 {
                     return true;
@@ -592,18 +591,35 @@ impl Checker<'_, '_> {
                     .map(|g| Type::Parameter(g.name.clone()))
                     .collect();
 
-                let constructor_ty = Type::Constructor {
-                    id: qualified_name.clone().into(),
-                    params,
-                    underlying_ty: None,
+                let canonical_ty = if self.cursor.module_id == "prelude" {
+                    if let Some(simple) = syntax::types::SimpleKind::from_name(name) {
+                        Type::Simple(simple)
+                    } else if let Some(compound) = syntax::types::CompoundKind::from_name(name) {
+                        Type::Compound {
+                            kind: compound,
+                            args: params,
+                        }
+                    } else {
+                        Type::Nominal {
+                            id: qualified_name.clone(),
+                            params,
+                            underlying_ty: None,
+                        }
+                    }
+                } else {
+                    Type::Nominal {
+                        id: qualified_name.clone(),
+                        params,
+                        underlying_ty: None,
+                    }
                 };
 
                 if generics.is_empty() {
-                    constructor_ty
+                    canonical_ty
                 } else {
                     Type::Forall {
                         vars: generics.iter().map(|g| g.name.clone()).collect(),
-                        body: Box::new(constructor_ty),
+                        body: Box::new(canonical_ty),
                     }
                 }
             };
@@ -621,7 +637,7 @@ impl Checker<'_, '_> {
                 .expect("current module must exist in store")
                 .definitions
                 .insert(
-                    qualified_name.into(),
+                    qualified_name,
                     Definition::TypeAlias {
                         visibility,
                         name: name.into(),
@@ -654,8 +670,8 @@ impl Checker<'_, '_> {
                 .iter()
                 .map(|g| Type::Parameter(g.name.clone()))
                 .collect();
-            Type::Constructor {
-                id: qualified_name.clone().into(),
+            Type::Nominal {
+                id: qualified_name.clone(),
                 params,
                 underlying_ty: Some(Box::new(body_ty)),
             }
@@ -696,7 +712,7 @@ impl Checker<'_, '_> {
             .expect("current module must exist in store")
             .definitions
             .insert(
-                qualified_name.into(),
+                qualified_name,
                 Definition::TypeAlias {
                     visibility,
                     name: name.into(),
@@ -742,7 +758,7 @@ impl Checker<'_, '_> {
 
     fn type_contains_name(ty: &Type, name: &str) -> bool {
         match ty {
-            Type::Constructor {
+            Type::Nominal {
                 id,
                 params,
                 underlying_ty,
@@ -753,6 +769,7 @@ impl Checker<'_, '_> {
                         .as_deref()
                         .is_some_and(|u| Self::type_contains_name(u, name))
             }
+            Type::Compound { args, .. } => args.iter().any(|a| Self::type_contains_name(a, name)),
             Type::Tuple(elements) => elements.iter().any(|e| Self::type_contains_name(e, name)),
             Type::Function {
                 params,
@@ -769,7 +786,7 @@ impl Checker<'_, '_> {
 
     fn collect_type_refs(ty: &Type, refs: &mut Vec<String>) {
         match ty {
-            Type::Constructor {
+            Type::Nominal {
                 id,
                 params,
                 underlying_ty,
@@ -779,6 +796,9 @@ impl Checker<'_, '_> {
                 if let Some(u) = underlying_ty {
                     Self::collect_type_refs(u, refs);
                 }
+            }
+            Type::Compound { args, .. } => {
+                args.iter().for_each(|a| Self::collect_type_refs(a, refs));
             }
             Type::Tuple(elements) => {
                 elements

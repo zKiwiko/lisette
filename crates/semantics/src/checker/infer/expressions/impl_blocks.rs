@@ -6,7 +6,6 @@ use syntax::program::Definition;
 use syntax::types::Type;
 
 use super::super::Checker;
-use super::super::checks::check_receiver;
 
 impl Checker<'_, '_> {
     pub(super) fn infer_impl_block(
@@ -53,7 +52,7 @@ impl Checker<'_, '_> {
         // If this is a tuple struct with a constructor, the receiver_name (which is the
         // type name) shadows the constructor function in the parent scope. Re-insert the
         // constructor so it's callable from within impl methods.
-        if let Type::Constructor { id, .. } = &impl_ty
+        if let Type::Nominal { id, .. } = &impl_ty
             && let Some(Definition::Struct {
                 constructor: Some(ctor_ty),
                 ..
@@ -66,19 +65,17 @@ impl Checker<'_, '_> {
                 .insert(receiver_name.to_string(), ctor_ty);
         }
 
-        self.inference.impl_receiver_type = Some(impl_ty.clone());
+        self.scopes.set_impl_receiver_type(Some(impl_ty.clone()));
 
         let new_methods: Vec<Expression> = methods
             .into_iter()
             .map(|method| {
                 let method_ty = self.new_type_var();
-                let inferred = self.infer_expression(method, &method_ty);
-                check_receiver(self.sink, &inferred, &impl_ty);
-                inferred
+                self.infer_expression(method, &method_ty)
             })
             .collect();
 
-        self.inference.impl_receiver_type = None;
+        self.scopes.set_impl_receiver_type(None);
         self.scopes.pop();
 
         Expression::ImplBlock {
@@ -105,8 +102,6 @@ impl Checker<'_, '_> {
         else {
             unreachable!()
         };
-
-        self.check_prelude_shadowing(&name, name_span);
 
         self.scopes.push();
         self.put_in_scope(&generics);

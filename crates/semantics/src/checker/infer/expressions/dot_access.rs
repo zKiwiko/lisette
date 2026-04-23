@@ -1,10 +1,11 @@
+use crate::checker::EnvResolve;
 use ecow::EcoString;
 use syntax::ast::{Expression, Span, StructKind};
-use syntax::program::{Definition, DotAccessKind, ReceiverCoercion};
-use syntax::types::{Type, substitute, unqualified_name};
+use syntax::program::{Definition, DotAccessKind, NativeTypeKind, ReceiverCoercion};
+use syntax::types::{Symbol, Type, substitute, unqualified_name};
 
 use super::super::Checker;
-use super::super::checks::check_is_non_addressable;
+use super::super::addressability::check_is_non_addressable;
 use super::primitives::contains_deref;
 
 impl Checker<'_, '_> {
@@ -64,12 +65,22 @@ impl Checker<'_, '_> {
                 .store
                 .get_definition(&qualified_root)
                 .and_then(|definition| {
-                    if let Definition::TypeAlias { ty: alias_ty, .. } = definition
-                        && let Type::Constructor { id, params, .. } = alias_ty.unwrap_forall()
-                        && params.is_empty()
-                        && id.as_str() != qualified_root.as_str()
-                    {
-                        return Some(id.to_string());
+                    if let Definition::TypeAlias { ty: alias_ty, .. } = definition {
+                        let underlying = alias_ty.unwrap_forall();
+                        match underlying {
+                            Type::Nominal { id, params, .. }
+                                if params.is_empty() && id.as_str() != qualified_root.as_str() =>
+                            {
+                                return Some(id.to_string());
+                            }
+                            Type::Simple(kind) => {
+                                return Some(format!("prelude.{}", kind.leaf_name()));
+                            }
+                            Type::Compound { kind, args } if args.is_empty() => {
+                                return Some(format!("prelude.{}", kind.leaf_name()));
+                            }
+                            _ => {}
+                        }
                     }
                     None
                 });
@@ -107,9 +118,9 @@ impl Checker<'_, '_> {
         {
             let underlying = alias_ty.unwrap_forall();
             let is_generic = matches!(alias_ty, Type::Forall { .. })
-                || matches!(underlying, Type::Constructor { params, .. } if !params.is_empty());
+                || matches!(underlying, Type::Nominal { params, .. } if !params.is_empty());
             if is_generic {
-                let type_name = if let Type::Constructor { id, .. } = underlying {
+                let type_name = if let Type::Nominal { id, .. } = underlying {
                     id.split('.').next_back().unwrap_or(id).to_string()
                 } else {
                     "the original type".to_string()
@@ -133,14 +144,6 @@ impl Checker<'_, '_> {
     }
 }
 
-fn is_native_type(ty: &Type) -> bool {
-    let resolved = ty.resolve().strip_refs();
-    matches!(
-        resolved.get_name(),
-        Some("Slice" | "EnumeratedSlice" | "Map" | "Channel" | "Sender" | "Receiver" | "string")
-    )
-}
-
 struct DotAccessResolutionArgs<'a> {
     expression: &'a Expression,
     expression_ty: &'a Type,
@@ -158,11 +161,10 @@ impl Checker<'_, '_> {
         expected_ty: &Type,
     ) -> Expression {
         let expression_ty = self.new_type_var();
-        let prior_dot_access_base = self.inference.dot_access_base;
-        self.inference.dot_access_base = true;
+        let prior_dot_access_base = self.scopes.set_dot_access_base(true);
         let new_expression = self.infer_expression(*expression, &expression_ty);
-        self.inference.dot_access_base = prior_dot_access_base;
-        let resolved_expression_ty = expression_ty.resolve();
+        self.scopes.set_dot_access_base(prior_dot_access_base);
+        let resolved_expression_ty = expression_ty.resolve_in(&self.env);
 
         if resolved_expression_ty.is_error() {
             self.unify(expected_ty, &Type::Error, &span);
@@ -207,10 +209,10 @@ impl Checker<'_, '_> {
             }
             if !self.scopes.is_callee_context()
                 && matches!(
-                    expression.get_type().resolve(),
+                    expression.get_type().resolve_in(&self.env),
                     Type::Function { .. } | Type::Forall { .. }
                 )
-                && is_native_type(&resolved_expression_ty)
+                && NativeTypeKind::from_type(&resolved_expression_ty).is_some()
             {
                 self.sink
                     .push(diagnostics::infer::native_method_value(&member, span));
@@ -259,12 +261,11 @@ impl Checker<'_, '_> {
                 .is_some_and(Definition::is_type_definition),
             Expression::DotAccess {
                 expression: inner, ..
-            } => {
-                matches!(
-                    inner.get_type().shallow_resolve(),
-                    Type::Constructor { id, .. } if id.starts_with("@import/")
-                )
-            }
+            } => inner
+                .get_type()
+                .shallow_resolve_in(&self.env)
+                .as_import_namespace()
+                .is_some(),
             _ => false,
         }
     }
@@ -273,9 +274,9 @@ impl Checker<'_, '_> {
         let deref_ty = ty.strip_refs();
         let mut names = Vec::new();
 
-        if let Type::Constructor { .. } = deref_ty {
+        if let Type::Nominal { .. } = deref_ty {
             let qualified_name = deref_ty.get_qualified_name();
-            if let Some(fields) = self.store.get_struct_fields(&qualified_name) {
+            if let Some(fields) = self.store.fields_of(&qualified_name) {
                 names.extend(fields.iter().map(|f| f.name.to_string()));
             }
         }
@@ -292,7 +293,7 @@ impl Checker<'_, '_> {
     ) -> Option<(Expression, DotAccessKind)> {
         let deref_ty = args.expression_ty.strip_refs();
 
-        let Type::Constructor { .. } = deref_ty else {
+        let Type::Nominal { .. } = deref_ty else {
             return None;
         };
 
@@ -308,7 +309,7 @@ impl Checker<'_, '_> {
                 seen.push(name.clone());
                 let new_name = match self.store.get_definition(&name) {
                     Some(Definition::TypeAlias { ty, .. }) => {
-                        if let Type::Constructor { id, .. } = ty.unwrap_forall()
+                        if let Type::Nominal { id, .. } = ty.unwrap_forall()
                             && id.as_str() != name.as_str()
                         {
                             id.clone()
@@ -421,25 +422,19 @@ impl Checker<'_, '_> {
 
         // Look up by type-derived name first (works for non-aliased imports).
         // For aliased imports (e.g. `import u "utils"`), the map key is "u" but
-        // the type name is "utils", so fall back to matching by type ID.
+        // the type name is "utils", so fall back to matching by import module id.
         let (module_fields, module_ty) = self
             .imports
             .imported_modules
             .get(type_name)
             .cloned()
             .or_else(|| {
-                if let Type::Constructor { id, .. } = &deref_ty {
-                    self.imports
-                        .imported_modules
-                        .values()
-                        .find(|(_, ty)| match ty {
-                            Type::Constructor { id: ty_id, .. } => ty_id == id,
-                            _ => false,
-                        })
-                        .cloned()
-                } else {
-                    None
-                }
+                let module_id = deref_ty.as_import_namespace()?;
+                self.imports
+                    .imported_modules
+                    .values()
+                    .find(|(_, ty)| ty.as_import_namespace() == Some(module_id))
+                    .cloned()
             })?;
 
         let Some(member_type) = module_fields
@@ -460,15 +455,8 @@ impl Checker<'_, '_> {
             });
         };
 
-        // module_ty.id is "@import/module_id", extract actual module_id
-        if let Type::Constructor {
-            id: module_type_id, ..
-        } = &module_ty
-        {
-            let module_id = module_type_id
-                .strip_prefix("@import/")
-                .unwrap_or(module_type_id);
-            let qualified_name = format!("{}.{}", module_id, args.member_name);
+        if let Some(module_id) = module_ty.as_import_namespace() {
+            let qualified_name = Symbol::from_parts(module_id, args.member_name);
             if let Some(definition_span) = self.get_definition_name_span(&qualified_name) {
                 self.facts.add_usage(*args.span, definition_span);
             }
@@ -491,7 +479,7 @@ impl Checker<'_, '_> {
             }
 
             if !self.scopes.is_callee_context()
-                && !self.inference.dot_access_base
+                && !self.scopes.is_dot_access_base()
                 && matches!(
                     self.store.get_definition(&qualified_name),
                     Some(Definition::Struct {
@@ -528,7 +516,10 @@ impl Checker<'_, '_> {
     ) -> Option<(Expression, DotAccessKind)> {
         let deref_ty = args.expression_ty.strip_refs();
 
-        if !matches!(deref_ty, Type::Constructor { .. } | Type::Parameter(_)) {
+        if !matches!(
+            deref_ty,
+            Type::Nominal { .. } | Type::Parameter(_) | Type::Compound { .. } | Type::Simple(_)
+        ) {
             return None;
         }
 
@@ -550,7 +541,7 @@ impl Checker<'_, '_> {
 
         if let Some(expression) = self.as_method_value(args, &mut method_ty) {
             let is_pointer_receiver = if let Type::Function { params, .. } = &method_ty {
-                !params.is_empty() && params[0].resolve().is_ref()
+                !params.is_empty() && params[0].resolve_in(&self.env).is_ref()
             } else {
                 false
             };
@@ -605,9 +596,9 @@ impl Checker<'_, '_> {
         method_ty: &Type,
         args: &DotAccessResolutionArgs,
     ) {
-        if let Type::Constructor { .. } = deref_ty {
+        if let Type::Nominal { .. } = deref_ty {
             let qualified_name = deref_ty.get_qualified_name();
-            let method_key = format!("{}.{}", qualified_name, args.member_name);
+            let method_key = qualified_name.with_segment(args.member_name);
 
             if let Some(definition_span) = self.get_definition_name_span(&method_key) {
                 self.facts.add_usage(*args.span, definition_span);
@@ -650,8 +641,7 @@ impl Checker<'_, '_> {
         let is_cross_module_type_access = matches!(
             args.expression,
             Expression::DotAccess { expression: inner, .. }
-                if matches!(inner.get_type().resolve(),
-                    Type::Constructor { ref id, .. } if id.starts_with("@import/"))
+                if inner.get_type().resolve_in(&self.env).as_import_namespace().is_some()
         );
 
         if !is_cross_module_type_access || self.scopes.is_callee_context() {
@@ -660,9 +650,9 @@ impl Checker<'_, '_> {
 
         // Don't remove self — the value type should include the receiver.
         // Still unify the receiver type with the expression type for generic resolution.
-        let receiver_ty = params[0].resolve();
+        let receiver_ty = params[0].resolve_in(&self.env);
         let receiver_stripped = receiver_ty.strip_refs();
-        let expression_stripped = args.expression_ty.resolve().strip_refs();
+        let expression_stripped = args.expression_ty.resolve_in(&self.env).strip_refs();
         self.unify(&receiver_stripped, &expression_stripped, args.span);
 
         self.unify(args.expected_ty, method_ty, args.span);
@@ -686,15 +676,15 @@ impl Checker<'_, '_> {
         span: &Span,
     ) {
         // Resolve to follow any type variable links before checking is_ref
-        let receiver_ty = receiver_ty.resolve();
-        let actual_ty = actual_ty.resolve();
+        let receiver_ty = receiver_ty.resolve_in(&self.env);
+        let actual_ty = actual_ty.resolve_in(&self.env);
         let receiver_is_ref = receiver_ty.is_ref();
         let actual_is_ref = actual_ty.is_ref();
 
         match (receiver_is_ref, actual_is_ref) {
             (true, false) => {
                 // Method expects Ref<T>, have T → auto-address
-                if let Some(kind) = check_is_non_addressable(receiver_expression) {
+                if let Some(kind) = check_is_non_addressable(receiver_expression, &self.env) {
                     self.sink
                         .push(diagnostics::infer::cannot_auto_address_receiver(
                             kind,
@@ -757,7 +747,7 @@ impl Checker<'_, '_> {
         let binding_is_ref = self
             .scopes
             .lookup_value(&var_name)
-            .map(|t| t.resolve().is_ref())
+            .map(|t| t.resolve_in(&self.env).is_ref())
             .unwrap_or(false);
         if !is_deref && !binding_is_ref && !self.scopes.lookup_mutable(&var_name) {
             let self_type_name = if var_name == "self" {
@@ -781,11 +771,13 @@ impl Checker<'_, '_> {
     }
 
     pub(crate) fn get_receiver_generics_count(&self, receiver_ty: &Type) -> usize {
-        let Type::Constructor { id, .. } = receiver_ty else {
-            return 0;
+        let lookup_id: Symbol = match receiver_ty {
+            Type::Nominal { id, .. } => id.clone(),
+            Type::Compound { kind, .. } => Symbol::from_parts("prelude", kind.leaf_name()),
+            _ => return 0,
         };
 
-        match self.store.get_definition(id) {
+        match self.store.get_definition(&lookup_id) {
             Some(Definition::Struct { generics, .. }) => generics.len(),
             Some(Definition::TypeAlias { generics, .. }) => generics.len(),
             Some(Definition::Enum { generics, .. }) => generics.len(),
@@ -800,9 +792,9 @@ impl Checker<'_, '_> {
         let deref_ty = args.expression_ty.strip_refs();
 
         let id = match deref_ty {
-            Type::Constructor { id, .. } => id.clone(),
+            Type::Nominal { id, .. } => id.clone(),
             Type::Function { return_type, .. } => {
-                if let Type::Constructor { id, .. } = return_type.as_ref() {
+                if let Type::Nominal { id, .. } = return_type.as_ref() {
                     id.clone()
                 } else {
                     return None;
@@ -835,15 +827,14 @@ impl Checker<'_, '_> {
             let is_type_access = matches!(
                 args.expression,
                 Expression::DotAccess { expression, .. }
-                    if matches!(expression.get_type().resolve(),
-                        Type::Constructor { id, .. } if id.starts_with("@import/"))
+                    if expression.get_type().resolve_in(&self.env).as_import_namespace().is_some()
             );
             if !is_type_access {
                 return None;
             }
         }
 
-        let variant_qualified_name = format!("{}.{}", id, args.member_name);
+        let variant_qualified_name = id.with_segment(args.member_name);
         let variant_definition = self.store.get_definition(&variant_qualified_name)?;
 
         let Definition::Value {
@@ -891,13 +882,13 @@ impl Checker<'_, '_> {
             Type::Function {
                 ref return_type, ..
             } => {
-                if let Type::Constructor { id, .. } = return_type.as_ref() {
+                if let Type::Nominal { id, .. } = return_type.as_ref() {
                     id.clone()
                 } else {
                     return None;
                 }
             }
-            Type::Constructor { ref id, .. } => {
+            Type::Nominal { ref id, .. } => {
                 // For enums with Constructor type, we need to distinguish between:
                 // - Type access (e.g., `module.Color.default()`) - ALLOW
                 // - Value access (e.g., `c.new()` where c is a Color value) - REJECT
@@ -911,8 +902,7 @@ impl Checker<'_, '_> {
                     let is_type_access = matches!(
                         args.expression,
                         Expression::DotAccess { expression, .. }
-                            if matches!(expression.get_type().resolve(),
-                                Type::Constructor { id, .. } if id.starts_with("@import/"))
+                            if expression.get_type().resolve_in(&self.env).as_import_namespace().is_some()
                     );
                     if !is_type_access {
                         return None;
@@ -920,6 +910,8 @@ impl Checker<'_, '_> {
                 }
                 id.clone()
             }
+            Type::Simple(kind) => Symbol::from_parts("prelude", kind.leaf_name()),
+            Type::Compound { kind, .. } => Symbol::from_parts("prelude", kind.leaf_name()),
             _ => return None,
         };
 
@@ -930,7 +922,7 @@ impl Checker<'_, '_> {
             return None;
         }
 
-        let method_qualified_name = format!("{}.{}", id, args.member_name);
+        let method_qualified_name = id.with_segment(args.member_name);
         let method_definition = self.store.get_definition(&method_qualified_name)?;
 
         let Definition::Value {
@@ -998,7 +990,7 @@ impl Checker<'_, '_> {
     }
 
     fn is_dot_access_exported(&self, deref_ty: &Type, member_name: &str) -> bool {
-        let Type::Constructor { id, .. } = deref_ty.strip_refs() else {
+        let Type::Nominal { id, .. } = deref_ty.strip_refs() else {
             // Type parameters (bounded generics) — can't determine module,
             // fall back to false; the emitter will check method_needs_export.
             return false;
@@ -1010,7 +1002,7 @@ impl Checker<'_, '_> {
             return true;
         }
 
-        let method_key = format!("{}.{}", id, member_name);
+        let method_key = id.with_segment(member_name);
         self.store
             .get_definition(&method_key)
             .map(|d| d.visibility().is_public())

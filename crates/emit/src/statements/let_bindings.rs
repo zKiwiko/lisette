@@ -7,6 +7,7 @@ use crate::types::emitter::Position;
 use crate::utils::{DiscardGuard, requires_temp_var, try_flip_comparison};
 use crate::write_line;
 use syntax::ast::{Binding, Expression, Pattern};
+use syntax::types::Type;
 
 enum LetKind {
     /// Simple identifier binding: `let x = expression`
@@ -267,23 +268,36 @@ impl<'a, 'e> LetEmitter<'a, 'e> {
         }
     }
 
+    /// Pick the Go type for a `var X T` temp. Diverging values use the
+    /// binding type so dead `return x` paths still typecheck; tuple
+    /// branching values widen slots to match the assignment site.
+    fn resolve_temp_var_decl_ty(&mut self) -> Type {
+        let value_ty = self.value.get_type();
+        let base = if value_ty.is_unit() || value_ty.is_never() {
+            let binding_ty = &self.binding.ty;
+            if !binding_ty.is_unit() && !binding_ty.is_variable() {
+                self.binding.ty.clone()
+            } else {
+                value_ty
+            }
+        } else {
+            value_ty
+        };
+        let is_branching = matches!(
+            self.value,
+            Expression::If { .. } | Expression::Match { .. } | Expression::Select { .. }
+        );
+        if is_branching && let Type::Tuple(slots) = &base {
+            Type::Tuple(self.emitter.resolve_tuple_slot_types(slots.clone()))
+        } else {
+            base
+        }
+    }
+
     fn emit_temp_var_binding(&mut self, output: &mut String, identifier: &str) {
         if !self.emitter.is_declared(identifier) {
-            // When the value is a block whose tail is a `return`, the block's
-            // expression type is unit/Never but the binding type reflects how
-            // the variable is actually used after the dead code. Use the binding
-            // type to avoid a Go type mismatch in the dead `return x` path.
-            let value_ty = self.value.get_type();
-            let ty = if value_ty.is_unit() || value_ty.is_never() {
-                let binding_ty = &self.binding.ty;
-                if !binding_ty.is_unit() && !binding_ty.is_variable() {
-                    &self.binding.ty
-                } else {
-                    &value_ty
-                }
-            } else {
-                &value_ty
-            };
+            let resolved_ty = self.resolve_temp_var_decl_ty();
+            let ty = &resolved_ty;
 
             // When a try/recover block's ok_ty is an unresolved variable, the
             // var decl would be `Result[any, ...]`. Use the binding type if it
@@ -298,7 +312,12 @@ impl<'a, 'e> LetEmitter<'a, 'e> {
                 let binding_ty = &self.binding.ty;
                 if !binding_ty.is_variable() && !binding_ty.ok_type().is_variable() {
                     self.emitter.go_type_as_string(binding_ty)
-                } else if let Some(ctx_ty) = self.emitter.current_return_context.clone() {
+                } else if let Some(ctx_ty) = self
+                    .emitter
+                    .current_return_context
+                    .as_ref()
+                    .map(|c| c.ty.clone())
+                {
                     if Fallible::from_type(&ctx_ty).is_some() {
                         self.emitter.go_type_as_string(&ctx_ty)
                     } else {
@@ -753,10 +772,18 @@ impl Emitter<'_> {
             return;
         }
 
-        if self
+        let is_go_multi_return = self
             .resolve_go_call_strategy(value)
-            .is_some_and(|s| s.is_multi_return())
+            .is_some_and(|s| s.is_multi_return());
+        let is_lowered_lisette_call = if let Expression::Call {
+            expression: callee, ..
+        } = value
         {
+            self.classify_callee_abi(callee).is_some()
+        } else {
+            false
+        };
+        if is_go_multi_return || is_lowered_lisette_call {
             let call_str = self.emit_call(output, value, None);
             write_line!(output, "{}", call_str);
         } else {

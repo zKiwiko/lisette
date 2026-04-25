@@ -193,6 +193,7 @@ impl Emitter<'_> {
         };
 
         let has_strategy = self.resolve_go_call_strategy(call_expression).is_some();
+        let has_lowered_callee = self.classify_callee_abi(callee).is_some();
 
         let has_array_return = if let Expression::DotAccess {
             expression: receiver_expression,
@@ -206,7 +207,7 @@ impl Emitter<'_> {
             false
         };
 
-        if !has_strategy && !has_array_return {
+        if !has_strategy && !has_array_return && !has_lowered_callee {
             return None;
         }
 
@@ -217,7 +218,7 @@ impl Emitter<'_> {
         Some(call_str)
     }
 
-    pub(super) fn create_temp_vars(&mut self, hint: &str, count: usize) -> Vec<String> {
+    pub(crate) fn create_temp_vars(&mut self, hint: &str, count: usize) -> Vec<String> {
         (0..count)
             .map(|_| {
                 let v = self.fresh_var(Some(hint));
@@ -232,7 +233,7 @@ impl Emitter<'_> {
         format!("lisette.MakeTuple{}({})", vars.len(), vars.join(", "))
     }
 
-    pub(super) fn emit_tuple_from_vars(
+    pub(crate) fn emit_tuple_from_vars(
         &mut self,
         output: &mut String,
         vars: &[String],

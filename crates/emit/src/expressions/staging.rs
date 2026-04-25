@@ -58,6 +58,37 @@ impl Emitter<'_> {
         Staged::new(setup, value)
     }
 
+    /// Suppresses the Go-fn identity short-circuit when the formal param
+    /// is function-typed (prelude generic callbacks reject multi-return).
+    pub(crate) fn stage_prelude_arg(
+        &mut self,
+        expression: &Expression,
+        param_ty: Option<&syntax::types::Type>,
+    ) -> Staged {
+        let suppress = param_ty
+            .is_some_and(|p| matches!(p.unwrap_forall(), syntax::types::Type::Function { .. }));
+        let saved = std::mem::replace(&mut self.suppress_go_fn_short_circuit, suppress);
+        let staged = self.stage_composite(expression);
+        self.suppress_go_fn_short_circuit = saved;
+        staged
+    }
+
+    pub(crate) fn stage_native_method_args(
+        &mut self,
+        function: &Expression,
+        args: &[Expression],
+    ) -> Vec<Staged> {
+        let fn_ty = function.get_type();
+        let formal_params: &[syntax::types::Type] = match fn_ty.unwrap_forall() {
+            syntax::types::Type::Function { params, .. } => params,
+            _ => &[],
+        };
+        args.iter()
+            .enumerate()
+            .map(|(i, arg)| self.stage_prelude_arg(arg, formal_params.get(i)))
+            .collect()
+    }
+
     /// Like `sequence`, but also stages the spread as a sibling (so its
     /// setup participates in eval-order) and appends `...` to its value.
     pub(crate) fn sequence_with_spread(

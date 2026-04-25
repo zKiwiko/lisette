@@ -4136,3 +4136,535 @@ fn main() {
 
     assert_build_snapshot!(fs, "github.com/user/myproject");
 }
+
+#[test]
+fn user_marshal_json_lowers_to_go_abi_shape() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:encoding/json"
+import "go:fmt"
+
+struct Widget { id: int }
+
+impl Widget {
+  fn MarshalJSON(self) -> Result<Slice<uint8>, error> {
+    Ok("\"custom\"" as Slice<uint8>)
+  }
+}
+
+fn main() {
+  let w = Widget { id: 7 }
+  match json.Marshal(w) {
+    Ok(b) => fmt.Println(b as string),
+    Err(e) => fmt.Println(e),
+  }
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn user_close_lowers_to_bare_error() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+struct Resource {}
+
+impl Resource {
+  fn Close(self) -> Result<(), error> {
+    Ok(())
+  }
+}
+
+fn main() {
+  let r = Resource {}
+  let _ = r.Close()
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn non_error_err_slot_stays_tagged() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+struct MyError { msg: string }
+
+fn parse(s: string) -> Result<int, MyError> {
+  if s == "ok" {
+    Ok(1)
+  } else {
+    Err(MyError { msg: "bad" })
+  }
+}
+
+fn main() {
+  match parse("ok") {
+    Ok(_) => {},
+    Err(_) => {},
+  }
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn nested_result_inner_stays_tagged() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+fn outer() -> Result<Result<int, error>, error> {
+  Ok(Ok(1))
+}
+
+fn main() {
+  let _ = outer()
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+/// Regression: a function whose return type is a type alias of
+/// `Result<T, error>` must lower to the Go `(T, error)` ABI shape, not
+/// crash on `ok_type()` against the unresolved alias.
+#[test]
+fn aliased_result_return_lowers() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+type R = Result<int, error>
+
+fn parse() -> R {
+  Ok(1)
+}
+
+fn main() {
+  let _ = parse()
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+/// Regression: a `Result<T, E>` whose err slot is a type alias of `error`
+/// (`type MyErr = error`) must lower the same as a literal `Result<T, error>`.
+#[test]
+fn aliased_error_err_slot_lowers() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+type MyErr = error
+
+fn parse() -> Result<int, MyErr> {
+  Ok(1)
+}
+
+fn main() {
+  let _ = parse()
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn fused_match_arm_bindings_dont_leak() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:fmt"
+
+fn parse() -> Result<int, error> { Ok(1) }
+
+fn main() {
+  let x = 100
+  fmt.Println(x)
+  let x = 200
+  match parse() {
+    Ok(x) => fmt.Println(x),
+    Err(_) => fmt.Println("err"),
+  }
+  fmt.Println(x)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn user_text_marshaler_skips_adapter() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:encoding"
+
+struct Widget { id: int }
+
+impl Widget {
+  fn MarshalText(self) -> Result<Slice<byte>, error> {
+    Ok("custom" as Slice<byte>)
+  }
+}
+
+fn main() {
+  let w = Widget { id: 7 }
+  let _: encoding.TextMarshaler = w
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn tuple_with_nilable_option_slot_lowers_recursively() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+type Cmd = fn() -> int
+
+fn produce() -> (int, Option<Cmd>) {
+  (42, Some(|| 7))
+}
+
+fn consume() -> int {
+  let (n, c) = produce()
+  match c {
+    Some(f) => n + f(),
+    None => n,
+  }
+}
+
+fn main() {
+  let _ = consume()
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn user_alias_to_function_is_nilable_in_option_return() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:fmt"
+
+type Callback = fn() -> int
+
+fn maybe_get() -> Option<Callback> {
+  Some(|| 42)
+}
+
+fn run(cb: Option<Callback>) -> int {
+  match cb {
+    Some(f) => f(),
+    None => -1,
+  }
+}
+
+fn main() {
+  let cb = maybe_get()
+  fmt.Println(run(cb))
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn user_read_lowers_partial_to_io_reader() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:io"
+
+struct Reader {}
+
+impl Reader {
+  fn Read(self, mut _buf: Slice<uint8>) -> Partial<int, error> {
+    Partial.Both(0, io.EOF)
+  }
+}
+
+fn use_reader(r: io.Reader) -> int {
+  let _ = r
+  0
+}
+
+fn main() {
+  let r = Reader {}
+  let _ = use_reader(r as io.Reader)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn non_go_err_result_keeps_tagged_form() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+struct LoadError { msg: string }
+
+struct Loader {}
+
+impl Loader {
+  fn Load(self, _key: string) -> Result<int, LoadError> {
+    Ok(0)
+  }
+}
+
+fn run(l: Loader) -> int {
+  match l.Load("k") {
+    Ok(n) => n,
+    Err(_) => -1,
+  }
+}
+
+fn main() {
+  let l = Loader {}
+  let _ = run(l)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn struct_satisfies_inherited_methods_via_lowering() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:io"
+
+struct Dev {}
+
+impl Dev {
+  fn Read(self, mut _p: Slice<uint8>) -> Partial<int, error> {
+    Partial.Ok(0)
+  }
+  fn Write(self, _p: Slice<uint8>) -> Partial<int, error> {
+    Partial.Ok(0)
+  }
+}
+
+fn use_rw(_rw: io.ReadWriter) -> int {
+  0
+}
+
+fn main() {
+  let d = Dev {}
+  let _ = use_rw(d as io.ReadWriter)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn non_tail_tuple_branch_widens_temp_to_match_assignment() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:io"
+
+struct Reader1 {}
+struct Reader2 {}
+
+impl Reader1 {
+  fn Read(self, mut _p: Slice<uint8>) -> Partial<int, error> {
+    Partial.Ok(0)
+  }
+}
+
+impl Reader2 {
+  fn Read(self, mut _p: Slice<uint8>) -> Partial<int, error> {
+    Partial.Ok(1)
+  }
+}
+
+fn pick(flag: bool) -> (io.Reader, int) {
+  let result = match flag {
+    true => (Reader1 {}, 1),
+    false => (Reader2 {}, 2),
+  }
+  result
+}
+
+fn main() {
+  let _ = pick(true)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn comma_ok_hint_on_iface_method_synthesizes_adapter_bridge() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:crypto/tls"
+
+struct MyCache {}
+
+impl MyCache {
+  fn Get(self, _key: string) -> Option<Ref<tls.ClientSessionState>> {
+    None
+  }
+  fn Put(self, _key: string, _cs: Ref<tls.ClientSessionState>) {}
+}
+
+fn use_cache(_c: tls.ClientSessionCache) {}
+
+fn main() {
+  let c = MyCache {}
+  use_cache(c as tls.ClientSessionCache)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn inherited_comma_ok_hint_propagates_to_child_iface_cast() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+struct Entry { name: string }
+
+pub interface BaseCache {
+  #[go(comma_ok)]
+  fn Get(key: string) -> Option<Ref<Entry>>
+}
+
+pub interface ExtendedCache {
+  impl BaseCache
+  fn Touch()
+}
+
+struct MyCache {}
+
+impl MyCache {
+  fn Get(self, _key: string) -> Option<Ref<Entry>> {
+    None
+  }
+  fn Touch(self) {}
+}
+
+fn use_extended(_c: ExtendedCache) {}
+
+fn main() {
+  let c = MyCache {}
+  use_extended(c as ExtendedCache)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn user_iface_method_comma_ok_hint_applied_in_emission() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+struct Entry { name: string }
+
+pub interface Cache {
+  #[go(comma_ok)]
+  fn Get(key: string) -> Option<Ref<Entry>>
+}
+
+struct MyCache {}
+
+impl MyCache {
+  fn Get(self, _key: string) -> Option<Ref<Entry>> {
+    None
+  }
+}
+
+fn use_cache(_c: Cache) {}
+
+fn main() {
+  let c = MyCache {}
+  use_cache(c)
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}

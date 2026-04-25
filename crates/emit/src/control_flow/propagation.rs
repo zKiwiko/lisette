@@ -1,5 +1,9 @@
 use crate::Emitter;
-use crate::control_flow::fallible::{ConstructorKind, Fallible, FallibleEmitter};
+use crate::control_flow::fallible::{
+    ConstructorKind, Fallible, FallibleEmitter, OPTION_SOME_TAG, PARTIAL_ERR_TAG, PARTIAL_OK_TAG,
+    RESULT_OK_TAG,
+};
+use crate::types::abi::AbiShape;
 use crate::types::emitter::Position;
 use crate::utils::{inline_trivial_bindings, optimize_region};
 use crate::write_line;
@@ -53,17 +57,41 @@ impl Emitter<'_> {
         });
 
         let err_field = if fallible.is_result() { ".ErrVal" } else { "" };
-        let err_return = {
-            let mut fe = FallibleEmitter::new(self, &fallible);
-            fe.emit_contextual_failure(Some(&format!("{}{}", check_var, err_field)))
-        };
-        write_line!(
-            output,
-            "if {}.Tag != {} {{\nreturn {}\n}}",
-            check_var,
-            fallible.success_tag(),
-            err_return
-        );
+
+        if let Some(shape) = self.current_lowered_abi() {
+            let return_ty = self
+                .current_return_context
+                .as_ref()
+                .map(|ctx| ctx.ty.clone())
+                .expect("lowered abi");
+            // Option propagation: failure carries no payload, so emit a
+            // shape-specific `None` return rather than an err-return.
+            let lowered_failure = if fallible.is_result() {
+                let err_expr = format!("{}{}", check_var, err_field);
+                self.format_lowered_err_return(&shape, &return_ty, &err_expr)
+            } else {
+                self.format_lowered_none_return(&shape, &return_ty)
+            };
+            write_line!(
+                output,
+                "if {}.Tag != {} {{\n{}\n}}",
+                check_var,
+                fallible.success_tag(),
+                lowered_failure
+            );
+        } else {
+            let err_return = {
+                let mut fe = FallibleEmitter::new(self, &fallible);
+                fe.emit_contextual_failure(Some(&format!("{}{}", check_var, err_field)))
+            };
+            write_line!(
+                output,
+                "if {}.Tag != {} {{\nreturn {}\n}}",
+                check_var,
+                fallible.success_tag(),
+                err_return
+            );
+        }
 
         if result_var != "_" {
             write_line!(
@@ -76,6 +104,284 @@ impl Emitter<'_> {
         }
 
         result_var
+    }
+
+    /// Lower early-return body for an `Err`-with-payload expression.
+    pub(crate) fn format_lowered_err_return(
+        &mut self,
+        shape: &AbiShape,
+        return_ty: &Type,
+        err_expr: &str,
+    ) -> String {
+        match shape {
+            AbiShape::BareError => format!("return {}", err_expr),
+            AbiShape::ResultTuple => {
+                let ok_ty = self.peel_alias(return_ty).ok_type();
+                let ok_ty_str = self.go_type_as_string(&ok_ty);
+                format!("return *new({}), {}", ok_ty_str, err_expr)
+            }
+            // Partial/Tuple flow through their own paths.
+            AbiShape::PartialTuple | AbiShape::Tuple { .. } => {
+                unreachable!("not reached for shapes with their own emission paths")
+            }
+            AbiShape::CommaOk | AbiShape::NullableReturn => {
+                unreachable!("Option's failure constructor `None` carries no payload")
+            }
+        }
+    }
+
+    /// Lower tail-return body for a success-constructor's payload value.
+    pub(crate) fn format_lowered_ok_return(&mut self, shape: &AbiShape, ok_expr: &str) -> String {
+        match shape {
+            AbiShape::BareError => "return nil".to_string(),
+            AbiShape::ResultTuple => format!("return {}, nil", ok_expr),
+            AbiShape::PartialTuple | AbiShape::Tuple { .. } => {
+                unreachable!("not reached for shapes with their own emission paths")
+            }
+            AbiShape::CommaOk => format!("return {}, true", ok_expr),
+            AbiShape::NullableReturn => format!("return {}", ok_expr),
+        }
+    }
+
+    /// Lower body for a bare `None` (failure constructor with no payload).
+    pub(crate) fn format_lowered_none_return(
+        &mut self,
+        shape: &AbiShape,
+        return_ty: &Type,
+    ) -> String {
+        match shape {
+            AbiShape::CommaOk => {
+                let inner = self.peel_alias(return_ty).ok_type();
+                let inner_str = self.go_type_as_string(&inner);
+                format!("return *new({}), false", inner_str)
+            }
+            AbiShape::NullableReturn => "return nil".to_string(),
+            _ => unreachable!("only Option's `None` lacks a payload"),
+        }
+    }
+
+    /// Destructure a Lisette tagged value into a lowered Go-tuple return.
+    pub(crate) fn emit_lowered_result_return(
+        &mut self,
+        output: &mut String,
+        result_value: &str,
+        return_ty: &Type,
+        shape: &AbiShape,
+    ) {
+        let ok_ty_str = match shape {
+            AbiShape::ResultTuple | AbiShape::PartialTuple | AbiShape::CommaOk => {
+                let ok_ty = self.peel_alias(return_ty).ok_type();
+                Some(self.go_type_as_string(&ok_ty))
+            }
+            _ => None,
+        };
+        match shape {
+            AbiShape::BareError => {
+                write_line!(
+                    output,
+                    "if {p}.Tag == {ok} {{\nreturn nil\n}}\nreturn {p}.ErrVal",
+                    p = result_value,
+                    ok = RESULT_OK_TAG,
+                );
+            }
+            AbiShape::ResultTuple => {
+                let t = ok_ty_str.as_deref().unwrap();
+                write_line!(
+                    output,
+                    "if {p}.Tag == {ok} {{\nreturn {p}.OkVal, nil\n}}\nreturn *new({t}), {p}.ErrVal",
+                    p = result_value,
+                    ok = RESULT_OK_TAG,
+                );
+            }
+            AbiShape::PartialTuple => {
+                let t = ok_ty_str.as_deref().unwrap();
+                write_line!(
+                    output,
+                    "if {p}.Tag == {ok} {{\nreturn {p}.OkVal, nil\n}}\n\
+                     if {p}.Tag == {err} {{\nreturn *new({t}), {p}.ErrVal\n}}\n\
+                     return {p}.OkVal, {p}.ErrVal",
+                    p = result_value,
+                    ok = PARTIAL_OK_TAG,
+                    err = PARTIAL_ERR_TAG,
+                );
+            }
+            AbiShape::CommaOk => {
+                let t = ok_ty_str.as_deref().unwrap();
+                write_line!(
+                    output,
+                    "if {p}.Tag == {some} {{\nreturn {p}.SomeVal, true\n}}\n\
+                     return *new({t}), false",
+                    p = result_value,
+                    some = OPTION_SOME_TAG,
+                );
+            }
+            AbiShape::NullableReturn => {
+                write_line!(
+                    output,
+                    "if {p}.Tag == {some} {{\nreturn {p}.SomeVal\n}}\nreturn nil",
+                    p = result_value,
+                    some = OPTION_SOME_TAG,
+                );
+            }
+            AbiShape::Tuple { arity } => {
+                let peeled = self.peel_alias(return_ty);
+                let slot_tys = crate::types::abi::tuple_element_types(&peeled);
+                let any_nullable = slot_tys.iter().any(|t| self.is_nullable_option(t));
+                if !any_nullable {
+                    let fields: Vec<String> = (0..*arity)
+                        .map(|i| format!("{}.{}", result_value, syntax::parse::TUPLE_FIELDS[i]))
+                        .collect();
+                    write_line!(output, "return {}", fields.join(", "));
+                    return;
+                }
+                let fields: Vec<String> = (0..*arity)
+                    .map(|i| {
+                        let raw = format!("{}.{}", result_value, syntax::parse::TUPLE_FIELDS[i]);
+                        slot_tys
+                            .get(i)
+                            .filter(|t| self.is_nullable_option(t))
+                            .map(|t| self.emit_option_unwrap_to_nullable(output, &raw, t))
+                            .unwrap_or(raw)
+                    })
+                    .collect();
+                write_line!(output, "return {}", fields.join(", "));
+            }
+        }
+    }
+
+    /// `Some(x)`/`None` collapse to `x`/`nil`; other Option expressions
+    /// go through `emit_option_unwrap_to_nullable`.
+    fn emit_nullable_slot_value(
+        &mut self,
+        output: &mut String,
+        expression: &Expression,
+        slot_ty: &Type,
+    ) -> String {
+        if let Expression::Call {
+            expression: callee,
+            args,
+            ..
+        } = expression
+            && let Some(kind) = callee.as_option_constructor()
+        {
+            return match kind {
+                Ok(()) => {
+                    debug_assert_eq!(args.len(), 1, "Some(...) takes exactly one arg");
+                    self.emit_composite_value(output, &args[0])
+                }
+                Err(()) => "nil".to_string(),
+            };
+        }
+        if let Expression::Identifier { .. } = expression
+            && expression.as_option_constructor() == Some(Err(()))
+        {
+            return "nil".to_string();
+        }
+        let value = self.emit_value(output, expression);
+        self.emit_option_unwrap_to_nullable(output, &value, slot_ty)
+    }
+
+    /// Tail return for `PartialTuple` and `Tuple` ABIs, which need
+    /// per-shape handling beyond the generic `emit_wrapped_return` path.
+    pub(crate) fn try_emit_lowered_tail_return(
+        &mut self,
+        output: &mut String,
+        expression: &Expression,
+    ) -> bool {
+        let Some(shape) = self.current_lowered_abi() else {
+            return false;
+        };
+        match shape {
+            AbiShape::PartialTuple => self.emit_lowered_partial_tail(output, expression),
+            AbiShape::Tuple { arity } => self.emit_lowered_tuple_tail(output, expression, arity),
+            _ => false,
+        }
+    }
+
+    fn emit_lowered_tuple_tail(
+        &mut self,
+        output: &mut String,
+        expression: &Expression,
+        arity: usize,
+    ) -> bool {
+        if let Expression::Tuple { elements, .. } = expression
+            && elements.len() == arity
+        {
+            let return_ty = self
+                .current_return_context
+                .as_ref()
+                .expect("lowered abi requires a return context")
+                .ty
+                .clone();
+            let slot_tys = crate::types::abi::tuple_element_types(&self.peel_alias(&return_ty));
+            let parts: Vec<String> = elements
+                .iter()
+                .enumerate()
+                .map(|(i, e)| match slot_tys.get(i) {
+                    Some(slot_ty) if self.is_nullable_option(slot_ty) => {
+                        self.emit_nullable_slot_value(output, e, slot_ty)
+                    }
+                    _ => self.emit_composite_value(output, e),
+                })
+                .collect();
+            write_line!(output, "return {}", parts.join(", "));
+            return true;
+        }
+
+        let return_ty = self
+            .current_return_context
+            .as_ref()
+            .expect("lowered abi requires a return context")
+            .ty
+            .clone();
+        let value = self.emit_value(output, expression);
+        let temp = self.fresh_var(Some("tup"));
+        self.declare(&temp);
+        write_line!(output, "{} := {}", temp, value);
+        self.emit_lowered_result_return(output, &temp, &return_ty, &AbiShape::Tuple { arity });
+        true
+    }
+
+    fn emit_lowered_partial_tail(&mut self, output: &mut String, expression: &Expression) -> bool {
+        let return_ty = self
+            .current_return_context
+            .as_ref()
+            .expect("lowered abi requires a return context")
+            .ty
+            .clone();
+
+        if let Expression::Call {
+            expression: callee,
+            args,
+            ..
+        } = expression
+            && let Some(variant) = callee.as_partial_constructor()
+        {
+            self.flags.needs_stdlib = true;
+            match variant {
+                "Ok" => {
+                    let v = self.emit_composite_value(output, &args[0]);
+                    write_line!(output, "return {}, nil", v);
+                }
+                "Err" => {
+                    let e = self.emit_composite_value(output, &args[0]);
+                    let ok_ty = self.peel_alias(&return_ty).ok_type();
+                    let ok_ty_str = self.go_type_as_string(&ok_ty);
+                    write_line!(output, "return *new({}), {}", ok_ty_str, e);
+                }
+                "Both" => {
+                    let v = self.emit_composite_value(output, &args[0]);
+                    let e = self.emit_composite_value(output, &args[1]);
+                    write_line!(output, "return {}, {}", v, e);
+                }
+                _ => unreachable!("as_partial_constructor only returns Ok/Err/Both"),
+            }
+            return true;
+        }
+
+        let value = self.emit_value(output, expression);
+        self.emit_lowered_result_return(output, &value, &return_ty, &AbiShape::PartialTuple);
+        true
     }
 
     /// Assign the propagated expression to a fresh `check` temp so its
@@ -180,7 +486,7 @@ impl Emitter<'_> {
         let is_unit = self
             .current_return_context
             .as_ref()
-            .is_some_and(|ty| ty.is_unit());
+            .is_some_and(|ctx| ctx.ty.is_unit());
 
         if is_unit {
             let is_pure = matches!(
@@ -193,10 +499,15 @@ impl Emitter<'_> {
                 self.emit_statement(output, expression);
             }
             output.push_str("return\n");
-        } else if !self.emit_wrapped_return(output, expression) {
+        } else if !self.try_emit_lowered_tail_return(output, expression)
+            && !self.emit_wrapped_return(output, expression)
+        {
             let expression_string =
                 self.with_position(Position::Tail, |this| this.emit_value(output, expression));
-            let return_ty = self.current_return_context.clone();
+            let return_ty = self
+                .current_return_context
+                .as_ref()
+                .map(|ctx| ctx.ty.clone());
             let expression_string =
                 self.apply_type_coercion(output, return_ty.as_ref(), expression, expression_string);
             write_line!(output, "return {}", expression_string);
@@ -219,8 +530,8 @@ impl Emitter<'_> {
         let return_ty = self
             .current_return_context
             .as_ref()
-            .filter(|ctx_ty| Fallible::from_type(ctx_ty).is_some())
-            .cloned()
+            .map(|ctx| ctx.ty.clone())
+            .filter(|ty| Fallible::from_type(ty).is_some())
             .unwrap_or(expression_ty);
 
         let Some(fallible) = Fallible::from_type(&return_ty) else {
@@ -229,27 +540,64 @@ impl Emitter<'_> {
 
         self.flags.needs_stdlib = true;
 
+        let force_tagged = self
+            .current_return_context
+            .as_ref()
+            .is_some_and(|ctx| ctx.force_tagged);
+        let lowered = if force_tagged {
+            None
+        } else {
+            self.classify_direct_emission(&return_ty)
+        };
+
         if let Expression::Identifier { .. } = expression
             && fallible.classify_constructor(expression) == Some(ConstructorKind::Failure)
         {
-            let mut fe = FallibleEmitter::new(self, &fallible);
-            let failure = fe.emit_failure(None);
-            write_line!(output, "return {}", failure);
+            // Only `None` reaches here — `Err` always has a payload.
+            if let Some(shape) = lowered.as_ref() {
+                let line = self.format_lowered_none_return(shape, &return_ty);
+                write_line!(output, "{}", line);
+            } else {
+                let mut fe = FallibleEmitter::new(self, &fallible);
+                let failure = fe.emit_failure(None);
+                write_line!(output, "return {}", failure);
+            }
             return true;
         }
 
         if matches!(expression, Expression::Call { .. }) {
-            self.emit_wrapped_call_return(output, expression, &fallible, &return_ty);
+            self.emit_wrapped_call_return(
+                output,
+                expression,
+                &fallible,
+                &return_ty,
+                lowered.as_ref(),
+            );
             return true;
         }
 
         if matches!(expression, Expression::If { .. } | Expression::Match { .. }) {
-            self.emit_wrapped_branching_return(output, expression, &fallible, &return_ty);
+            self.emit_wrapped_branching_return(
+                output,
+                expression,
+                &fallible,
+                &return_ty,
+                lowered.as_ref(),
+            );
             return true;
         }
 
         let value = self.emit_value(output, expression);
-        write_line!(output, "return {}", value);
+        if let Some(shape) = lowered {
+            // The destructure references the value multiple times (`.Tag`,
+            // `.OkVal`, `.ErrVal` etc.); hoist to avoid re-evaluating.
+            let temp = self.fresh_var(Some("v"));
+            self.declare(&temp);
+            write_line!(output, "{} := {}", temp, value);
+            self.emit_lowered_result_return(output, &temp, &return_ty, &shape);
+        } else {
+            write_line!(output, "return {}", value);
+        }
         true
     }
 
@@ -262,6 +610,7 @@ impl Emitter<'_> {
         expression: &Expression,
         fallible: &Fallible,
         return_ty: &Type,
+        lowered: Option<&AbiShape>,
     ) {
         let Expression::Call {
             expression: call_expression,
@@ -273,45 +622,155 @@ impl Emitter<'_> {
         };
         match fallible.classify_constructor(call_expression) {
             Some(ConstructorKind::Success) => {
-                let arg = self.emit_composite_value(output, &args[0]);
-                let mut fe = FallibleEmitter::new(self, fallible);
-                let success = fe.emit_success(&arg);
-                write_line!(output, "return {}", success);
-            }
-            Some(ConstructorKind::Failure) => {
-                let failure = if fallible.is_result() {
+                if let Some(shape) = lowered {
+                    let ok_arg = if matches!(shape, AbiShape::BareError) {
+                        // Unit Ok — emit args[0] for side effects, then drop.
+                        if !args.is_empty() {
+                            let _ = self.emit_composite_value(output, &args[0]);
+                        }
+                        String::new()
+                    } else if args.is_empty() {
+                        // `Some` with no payload wouldn't typecheck; only
+                        // possible when Ok type is unit and we still need a
+                        // value for the tuple (`Some(())` under CommaOk).
+                        "struct{}{}".to_string()
+                    } else {
+                        self.emit_composite_value(output, &args[0])
+                    };
+                    let line = self.format_lowered_ok_return(shape, &ok_arg);
+                    write_line!(output, "{}", line);
+                } else {
                     let arg = self.emit_composite_value(output, &args[0]);
                     let mut fe = FallibleEmitter::new(self, fallible);
-                    fe.emit_failure(Some(&arg))
-                } else {
-                    let mut fe = FallibleEmitter::new(self, fallible);
-                    fe.emit_failure(None)
-                };
-                write_line!(output, "return {}", failure);
-            }
-            None => {
-                if let Some(strategy) = self.resolve_go_call_strategy(expression) {
-                    let result_var =
-                        self.emit_go_wrapped_call(output, expression, &strategy, return_ty);
-                    write_line!(output, "return {}", result_var);
-                } else {
-                    let call = self.emit_call(output, expression, None);
-                    write_line!(output, "return {}", call);
+                    let success = fe.emit_success(&arg);
+                    write_line!(output, "return {}", success);
                 }
             }
+            Some(ConstructorKind::Failure) => {
+                if let Some(shape) = lowered {
+                    if args.is_empty() {
+                        // `None` under lowered Option (CommaOk/NullableReturn).
+                        let line = self.format_lowered_none_return(shape, return_ty);
+                        write_line!(output, "{}", line);
+                    } else {
+                        let err_expr = self.emit_composite_value(output, &args[0]);
+                        let line = self.format_lowered_err_return(shape, return_ty, &err_expr);
+                        write_line!(output, "{}", line);
+                    }
+                } else {
+                    let failure = if fallible.is_result() {
+                        let arg = self.emit_composite_value(output, &args[0]);
+                        let mut fe = FallibleEmitter::new(self, fallible);
+                        fe.emit_failure(Some(&arg))
+                    } else {
+                        let mut fe = FallibleEmitter::new(self, fallible);
+                        fe.emit_failure(None)
+                    };
+                    write_line!(output, "return {}", failure);
+                }
+            }
+            None => self.emit_wrapped_passthrough_return(
+                output,
+                expression,
+                call_expression,
+                return_ty,
+                lowered,
+            ),
         }
     }
 
-    /// Emit an If/Match as a wrapped return by materializing its branches
-    /// into a temp var, then returning that temp. `optimize_region` may later
-    /// inline the temp if only one branch reaches the return.
+    /// Tail return for a non-constructor call.
+    fn emit_wrapped_passthrough_return(
+        &mut self,
+        output: &mut String,
+        expression: &Expression,
+        call_expression: &Expression,
+        return_ty: &Type,
+        lowered: Option<&AbiShape>,
+    ) {
+        if let Some(shape) = lowered
+            && self.callee_matches_lowered_shape(call_expression, shape)
+        {
+            let call = self.emit_call(output, expression, None);
+            write_line!(output, "return {}", call);
+            return;
+        }
+        if let Some(strategy) = self.resolve_go_call_strategy(expression) {
+            let result_var = self.emit_go_wrapped_call(output, expression, &strategy, return_ty);
+            if let Some(shape) = lowered {
+                self.emit_lowered_result_return(output, &result_var, return_ty, shape);
+            } else {
+                write_line!(output, "return {}", result_var);
+            }
+            return;
+        }
+        if let Some(shape) = lowered {
+            let value = self.emit_value(output, expression);
+            let temp = self.fresh_var(Some("v"));
+            self.declare(&temp);
+            write_line!(output, "{} := {}", temp, value);
+            self.emit_lowered_result_return(output, &temp, return_ty, shape);
+            return;
+        }
+        let call = self.emit_call(output, expression, None);
+        write_line!(output, "return {}", call);
+    }
+
+    /// True when the callee's natural multi-return matches the enclosing
+    /// shape, so a tail return can forward without rewrapping.
+    fn callee_matches_lowered_shape(
+        &self,
+        callee: &Expression,
+        enclosing_shape: &AbiShape,
+    ) -> bool {
+        let inner = callee.unwrap_parens();
+        if let Expression::DotAccess {
+            expression: receiver,
+            ..
+        } = inner
+            && Self::is_go_receiver(receiver)
+        {
+            let callee_ty = callee.get_type();
+            if let Type::Function { return_type, .. } = callee_ty.unwrap_forall()
+                && let Some(strategy) = self.classify_go_return_type(return_type, &[])
+            {
+                use crate::GoCallStrategy as G;
+                return match (strategy, enclosing_shape) {
+                    (G::Result, AbiShape::ResultTuple | AbiShape::BareError)
+                    | (G::Partial, AbiShape::PartialTuple)
+                    | (G::CommaOk, AbiShape::CommaOk)
+                    | (G::NullableReturn, AbiShape::NullableReturn) => true,
+                    (G::Tuple { arity: a }, AbiShape::Tuple { arity: b }) => a == *b,
+                    _ => false,
+                };
+            }
+        }
+        if let Some(callee_shape) = self.classify_callee_abi(callee) {
+            return callee_shape == *enclosing_shape;
+        }
+        false
+    }
+
+    /// Lowered ABI: push the return to each branch leaf so `Some(42)`
+    /// collapses to `return 42, true` directly. Tagged ABI keeps the
+    /// materialise-then-return shape so `optimize_region` can inline.
     fn emit_wrapped_branching_return(
         &mut self,
         output: &mut String,
         expression: &Expression,
         fallible: &Fallible,
         return_ty: &Type,
+        lowered: Option<&AbiShape>,
     ) {
+        if lowered.is_some() {
+            let saved_target_ty = self.assign_target_ty.replace(return_ty.clone());
+            self.with_position(Position::Tail, |this| {
+                this.emit_branching_directly(output, expression);
+            });
+            self.assign_target_ty = saved_target_ty;
+            return;
+        }
+
         let temp_var = self.fresh_var(None);
         self.declare(&temp_var);
         let full_ty = {
@@ -356,8 +815,10 @@ impl Emitter<'_> {
         write_line!(output, "{} := func() {} {{", result_var, full_ty);
         let closure_body_start = output.len();
 
-        let saved_return_context = self.current_return_context.clone();
-        self.current_return_context = Some(effective_ty.clone());
+        // The IIFE's signature is the tagged `Result`, so its body must too.
+        let saved_return_context = self
+            .current_return_context
+            .replace(crate::ReturnContext::tagged(effective_ty.clone()));
 
         self.with_fresh_scope(|emitter| {
             emitter.emit_try_body(output, items, &fallible);
@@ -390,8 +851,8 @@ impl Emitter<'_> {
         }
         self.current_return_context
             .as_ref()
-            .filter(|ctx_ty| Fallible::from_type(ctx_ty).is_some())
-            .cloned()
+            .map(|ctx| ctx.ty.clone())
+            .filter(|ty| Fallible::from_type(ty).is_some())
             .unwrap_or_else(|| ty.clone())
     }
 
@@ -521,8 +982,9 @@ impl Emitter<'_> {
             inner_ty_str
         );
 
-        let saved_return_context = self.current_return_context.clone();
-        self.current_return_context = Some(fallible.ok_ty().clone());
+        let saved_return_context = self
+            .current_return_context
+            .replace(crate::ReturnContext::new(fallible.ok_ty().clone()));
 
         self.with_fresh_scope(|emitter| {
             emitter.emit_recover_body(output, items, &fallible);

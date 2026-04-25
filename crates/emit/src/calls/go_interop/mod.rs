@@ -20,11 +20,17 @@ pub(crate) enum GoCallStrategy {
     /// (T, error) → Partial<T, error>. Non-exclusive returns where both value and error
     /// may be simultaneously meaningful (e.g. io.Reader.Read).
     Partial,
+    /// Single return of T → Option<T> via `val != sentinel` check
+    /// (e.g. `#[go(sentinel_minus_one)]` on `Option<int>`).
+    Sentinel { value: i64 },
 }
 
 impl GoCallStrategy {
     pub(crate) fn is_multi_return(&self) -> bool {
-        !matches!(self, GoCallStrategy::NullableReturn)
+        !matches!(
+            self,
+            GoCallStrategy::NullableReturn | GoCallStrategy::Sentinel { .. }
+        )
     }
 }
 
@@ -43,6 +49,9 @@ impl Emitter<'_> {
         }
 
         if return_ty.is_option() {
+            if let Some(sentinel) = sentinel_hint(go_hints) {
+                return Some(GoCallStrategy::Sentinel { value: sentinel });
+            }
             if !self.is_nullable_option(return_ty) {
                 return Some(GoCallStrategy::CommaOk);
             }
@@ -121,6 +130,9 @@ impl Emitter<'_> {
             }
             GoCallStrategy::Partial => {
                 self.emit_go_partial_call_wrapped(output, expression, result_ty)
+            }
+            GoCallStrategy::Sentinel { value } => {
+                self.emit_go_sentinel_call_wrapped(output, expression, result_ty, *value)
             }
         }
     }
@@ -245,4 +257,11 @@ impl Emitter<'_> {
         write_line!(output, "{} := {}", tuple_var, constructor);
         tuple_var
     }
+}
+
+fn sentinel_hint(hints: &[String]) -> Option<i64> {
+    hints
+        .iter()
+        .any(|h| h == "sentinel_minus_one")
+        .then_some(-1)
 }

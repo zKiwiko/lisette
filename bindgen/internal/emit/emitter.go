@@ -200,6 +200,9 @@ func (e *Emitter) emitFunction(result convert.ConvertResult) {
 	if result.ArrayReturn {
 		e.buf.WriteString("#[go(array_return)]\n")
 	}
+	if result.SentinelInt != nil {
+		e.buf.WriteString(sentinelFlag(*result.SentinelInt) + "\n")
+	}
 	if e.shouldAllowUnusedResult(result.Name, "", result) {
 		e.buf.WriteString("#[allow(unused_result)]\n")
 	}
@@ -270,6 +273,9 @@ func (e *Emitter) emitMethodInImpl(result convert.ConvertResult) {
 	}
 	if result.ArrayReturn {
 		e.buf.WriteString("  #[go(array_return)]\n")
+	}
+	if result.SentinelInt != nil {
+		e.buf.WriteString("  " + sentinelFlag(*result.SentinelInt) + "\n")
 	}
 	if result.Receiver != nil {
 		qualifiedName := result.Receiver.BaseTypeName + "." + result.Name
@@ -545,4 +551,12 @@ func (e *Emitter) emitDocWithIndent(doc, indent string) {
 		e.buf.WriteString(line)
 		e.buf.WriteString("\n")
 	}
+}
+
+func sentinelFlag(value int) string {
+	switch value {
+	case -1:
+		return "#[go(sentinel_minus_one)]"
+	}
+	panic(fmt.Sprintf("bindgen: unsupported sentinel value %d (add a flag mapping)", value))
 }

@@ -4,12 +4,12 @@ source: tests/spec/build/mod.rs
 // === main.go ===
 package main
 
-type MyErr = error
+import "strconv"
 
-func parse() (int, MyErr) {
-	return 1, nil
+func parse(_ string) (int, *strconv.NumError) {
+	return 0, nil
 }
 
 func main() {
-	parse()
+	parse("x")
 }

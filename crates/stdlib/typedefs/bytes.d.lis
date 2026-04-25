@@ -105,16 +105,19 @@ pub fn HasPrefix(s: Slice<uint8>, prefix: Slice<uint8>) -> bool
 pub fn HasSuffix(s: Slice<uint8>, suffix: Slice<uint8>) -> bool
 
 /// Index returns the index of the first instance of sep in s, or -1 if sep is not present in s.
-pub fn Index(s: Slice<uint8>, sep: Slice<uint8>) -> int
+#[go(sentinel_minus_one)]
+pub fn Index(s: Slice<uint8>, sep: Slice<uint8>) -> Option<int>
 
 /// IndexAny interprets s as a sequence of UTF-8-encoded Unicode code points.
 /// It returns the byte index of the first occurrence in s of any of the Unicode
 /// code points in chars. It returns -1 if chars is empty or if there is no code
 /// point in common.
-pub fn IndexAny(s: Slice<uint8>, chars: string) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexAny(s: Slice<uint8>, chars: string) -> Option<int>
 
 /// IndexByte returns the index of the first instance of c in b, or -1 if c is not present in b.
-pub fn IndexByte(b: Slice<uint8>, c: uint8) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexByte(b: Slice<uint8>, c: uint8) -> Option<int>
 
 /// IndexFunc interprets s as a sequence of UTF-8-encoded code points.
 /// It returns the byte index in s of the first Unicode
@@ -126,23 +129,27 @@ pub fn IndexFunc(s: Slice<uint8>, f: fn(int32) -> bool) -> int
 /// It returns -1 if rune is not present in s.
 /// If r is [utf8.RuneError], it returns the first instance of any
 /// invalid UTF-8 byte sequence.
-pub fn IndexRune(s: Slice<uint8>, r: int32) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexRune(s: Slice<uint8>, r: int32) -> Option<int>
 
 /// Join concatenates the elements of s to create a new byte slice. The separator
 /// sep is placed between elements in the resulting slice.
 pub fn Join(s: Slice<Slice<uint8>>, sep: Slice<uint8>) -> Slice<uint8>
 
 /// LastIndex returns the index of the last instance of sep in s, or -1 if sep is not present in s.
-pub fn LastIndex(s: Slice<uint8>, sep: Slice<uint8>) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndex(s: Slice<uint8>, sep: Slice<uint8>) -> Option<int>
 
 /// LastIndexAny interprets s as a sequence of UTF-8-encoded Unicode code
 /// points. It returns the byte index of the last occurrence in s of any of
 /// the Unicode code points in chars. It returns -1 if chars is empty or if
 /// there is no code point in common.
-pub fn LastIndexAny(s: Slice<uint8>, chars: string) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndexAny(s: Slice<uint8>, chars: string) -> Option<int>
 
 /// LastIndexByte returns the index of the last instance of c in s, or -1 if c is not present in s.
-pub fn LastIndexByte(s: Slice<uint8>, c: uint8) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndexByte(s: Slice<uint8>, c: uint8) -> Option<int>
 
 /// LastIndexFunc interprets s as a sequence of UTF-8-encoded code points.
 /// It returns the byte index in s of the last Unicode

@@ -232,14 +232,17 @@ impl Emitter<'_> {
         go_name::is_go_import(&id)
     }
 
+    /// True for types whose Go materialisation is nilable: `Ref<T>` →
+    /// `*T`, Lisette/Go interfaces, and function aliases (Go's
+    /// function types are themselves nilable).
+    pub(crate) fn is_nilable_go_type(&self, ty: &Type) -> bool {
+        ty.is_ref()
+            || self.as_interface(ty).is_some()
+            || self.resolve_to_function_type(ty).is_some()
+    }
+
     pub(crate) fn is_nullable_option(&self, ty: &Type) -> bool {
-        if !ty.is_option() {
-            return false;
-        }
-        let inner = ty.ok_type();
-        inner.is_ref()
-            || self.as_interface(&inner).is_some()
-            || self.resolve_to_function_type(&inner).is_some()
+        ty.is_option() && self.is_nilable_go_type(&ty.ok_type())
     }
 
     /// Returns true if the Option wraps a Go interface type (not a pointer).

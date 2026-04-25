@@ -83,6 +83,7 @@ func (c *Converter) convertFunction(result *ConvertResult, symbolExport extract.
 	}
 	result.CommaOk = returnType.CommaOk
 	result.ArrayReturn = returnType.ArrayReturn
+	c.applySentinelInt(result, result.Name)
 
 	isSinglePointerReturn := isSinglePointerResult(signature)
 	if isSinglePointerReturn && returnType.IsDirectError {
@@ -121,6 +122,20 @@ func (c *Converter) convertFunction(result *ConvertResult, symbolExport extract.
 		return
 	}
 	result.TypeParams = typeParams
+}
+
+// applySentinelInt rewrites a bare `int` return into `Option<int>` when
+// the config declares a sentinel; emit then writes the matching flag.
+func (c *Converter) applySentinelInt(result *ConvertResult, qualifiedName string) {
+	if c.cfg == nil || result.ReturnType != "int" {
+		return
+	}
+	value, ok := c.cfg.SentinelInt(c.currentPkgPath, qualifiedName)
+	if !ok {
+		return
+	}
+	result.ReturnType = "Option<int>"
+	result.SentinelInt = &value
 }
 
 func (c *Converter) convertMethod(result *ConvertResult, symbolExport extract.SymbolExport) {
@@ -221,6 +236,7 @@ func (c *Converter) convertMethod(result *ConvertResult, symbolExport extract.Sy
 	}
 	result.CommaOk = returnType.CommaOk
 	result.ArrayReturn = returnType.ArrayReturn
+	c.applySentinelInt(result, qualifiedName)
 
 	isSinglePointerReturn := isSinglePointerResult(signature)
 	if isSinglePointerReturn && returnType.IsDirectError {

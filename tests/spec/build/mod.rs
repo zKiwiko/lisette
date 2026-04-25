@@ -4668,3 +4668,52 @@ fn main() {
 
     assert_build_snapshot!(fs, "github.com/user/myproject");
 }
+
+#[test]
+fn result_with_pointer_error_lowers_to_native_tuple() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:strconv"
+
+fn parse(_s: string) -> Result<int, Ref<strconv.NumError>> {
+  Ok(0)
+}
+
+fn main() {
+  let _ = parse("x")
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}
+
+#[test]
+fn strings_index_lowers_sentinel_to_option() {
+    let mut fs = MockFileSystem::new();
+
+    fs.add_file(
+        ENTRY_MODULE_ID,
+        "main.lis",
+        r#"
+import "go:strings"
+
+fn find(haystack: string, needle: string) -> int {
+  match strings.Index(haystack, needle) {
+    Some(i) => i,
+    None => -2,
+  }
+}
+
+fn main() {
+  let _ = find("hello", "lo")
+}
+"#,
+    );
+
+    assert_build_snapshot!(fs, "github.com/user/myproject");
+}

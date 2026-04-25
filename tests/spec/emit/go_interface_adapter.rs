@@ -662,3 +662,23 @@ pub fn Quit() -> Msg
 "#;
     assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/tea", typedef)]);
 }
+
+#[test]
+fn sentinel_int_hint_wraps_to_option_at_call_site() {
+    let input = r#"
+import "go:example.com/idx"
+
+fn main() {
+  let pos = idx.Find("hello", "lo")
+  let _ = match pos {
+    Some(i) => i,
+    None => -2,
+  }
+}
+"#;
+    let typedef = r#"
+#[go(sentinel_minus_one)]
+pub fn Find(s: string, substr: string) -> Option<int>
+"#;
+    assert_emit_snapshot_with_go_typedefs!(input, &[("go:example.com/idx", typedef)]);
+}

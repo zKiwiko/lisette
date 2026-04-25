@@ -102,43 +102,52 @@ pub fn HasPrefix(s: string, prefix: string) -> bool
 pub fn HasSuffix(s: string, suffix: string) -> bool
 
 /// Index returns the index of the first instance of substr in s, or -1 if substr is not present in s.
-pub fn Index(s: string, substr: string) -> int
+#[go(sentinel_minus_one)]
+pub fn Index(s: string, substr: string) -> Option<int>
 
 /// IndexAny returns the index of the first instance of any Unicode code point
 /// from chars in s, or -1 if no Unicode code point from chars is present in s.
-pub fn IndexAny(s: string, chars: string) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexAny(s: string, chars: string) -> Option<int>
 
 /// IndexByte returns the index of the first instance of c in s, or -1 if c is not present in s.
-pub fn IndexByte(s: string, c: uint8) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexByte(s: string, c: uint8) -> Option<int>
 
 /// IndexFunc returns the index into s of the first Unicode
 /// code point satisfying f(c), or -1 if none do.
-pub fn IndexFunc(s: string, f: fn(int32) -> bool) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexFunc(s: string, f: fn(int32) -> bool) -> Option<int>
 
 /// IndexRune returns the index of the first instance of the Unicode code point
 /// r, or -1 if rune is not present in s.
 /// If r is [utf8.RuneError], it returns the first instance of any
 /// invalid UTF-8 byte sequence.
-pub fn IndexRune(s: string, r: int32) -> int
+#[go(sentinel_minus_one)]
+pub fn IndexRune(s: string, r: int32) -> Option<int>
 
 /// Join concatenates the elements of its first argument to create a single string. The separator
 /// string sep is placed between elements in the resulting string.
 pub fn Join(elems: Slice<string>, sep: string) -> string
 
 /// LastIndex returns the index of the last instance of substr in s, or -1 if substr is not present in s.
-pub fn LastIndex(s: string, substr: string) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndex(s: string, substr: string) -> Option<int>
 
 /// LastIndexAny returns the index of the last instance of any Unicode code
 /// point from chars in s, or -1 if no Unicode code point from chars is
 /// present in s.
-pub fn LastIndexAny(s: string, chars: string) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndexAny(s: string, chars: string) -> Option<int>
 
 /// LastIndexByte returns the index of the last instance of c in s, or -1 if c is not present in s.
-pub fn LastIndexByte(s: string, c: uint8) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndexByte(s: string, c: uint8) -> Option<int>
 
 /// LastIndexFunc returns the index into s of the last
 /// Unicode code point satisfying f(c), or -1 if none do.
-pub fn LastIndexFunc(s: string, f: fn(int32) -> bool) -> int
+#[go(sentinel_minus_one)]
+pub fn LastIndexFunc(s: string, f: fn(int32) -> bool) -> Option<int>
 
 /// Lines returns an iterator over the newline-terminated lines in the string s.
 /// The lines yielded by the iterator include their terminating newlines.

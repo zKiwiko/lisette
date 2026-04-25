@@ -25,14 +25,14 @@ impl Emitter<'_> {
     /// Lowered shape for a Lisette return type, or `None` to keep it tagged.
     pub(crate) fn classify_direct_emission(&self, return_ty: &Type) -> Option<AbiShape> {
         let peeled = self.peel_alias(return_ty);
-        if peeled.is_result() && self.err_type_is_go_error(&peeled) {
+        if peeled.is_result() && self.err_slot_is_nilable(&peeled) {
             return Some(if peeled.ok_type().is_unit() {
                 AbiShape::BareError
             } else {
                 AbiShape::ResultTuple
             });
         }
-        if peeled.is_partial() && self.err_type_is_go_error(&peeled) {
+        if peeled.is_partial() && self.err_slot_is_nilable(&peeled) {
             return Some(AbiShape::PartialTuple);
         }
         if peeled.is_option() {
@@ -50,11 +50,12 @@ impl Emitter<'_> {
         None
     }
 
-    /// True when the err slot of a `Result`/`Partial` resolves to Go's
-    /// `error`, peeling type aliases (`type MyErr = error`).
-    fn err_type_is_go_error(&self, fallible_ty: &Type) -> bool {
+    /// True when the err slot of a `Result`/`Partial` lowers to a Go
+    /// nilable type, so `nil` typechecks as the no-error sentinel.
+    fn err_slot_is_nilable(&self, fallible_ty: &Type) -> bool {
         let err = self.peel_alias(&fallible_ty.err_type());
         matches!(&err, Type::Nominal { id, .. } if id.as_str() == "prelude.error")
+            || self.is_nilable_go_type(&err)
     }
 
     /// Render the lowered Go return type.
@@ -63,24 +64,21 @@ impl Emitter<'_> {
         shape: &AbiShape,
         return_ty: &Type,
     ) -> String {
+        let peeled = self.peel_alias(return_ty);
         match shape {
-            AbiShape::BareError => "error".to_string(),
+            AbiShape::BareError => self.go_type_as_string(&peeled.err_type()),
             AbiShape::ResultTuple | AbiShape::PartialTuple => {
-                let ok_ty = self.peel_alias(return_ty).ok_type();
-                let ok_str = self.go_type_as_string(&ok_ty);
-                format!("({}, error)", ok_str)
+                let ok_str = self.go_type_as_string(&peeled.ok_type());
+                let err_str = self.go_type_as_string(&peeled.err_type());
+                format!("({}, {})", ok_str, err_str)
             }
             AbiShape::CommaOk => {
-                let inner = self.peel_alias(return_ty).ok_type();
-                let inner_str = self.go_type_as_string(&inner);
+                let inner_str = self.go_type_as_string(&peeled.ok_type());
                 format!("({}, bool)", inner_str)
             }
-            AbiShape::NullableReturn => {
-                let inner = self.peel_alias(return_ty).ok_type();
-                self.go_type_as_string(&inner)
-            }
+            AbiShape::NullableReturn => self.go_type_as_string(&peeled.ok_type()),
             AbiShape::Tuple { .. } => {
-                let parts: Vec<String> = tuple_element_types(&self.peel_alias(return_ty))
+                let parts: Vec<String> = tuple_element_types(&peeled)
                     .iter()
                     .map(|t| self.tuple_slot_lowered_ty_string(t))
                     .collect();
@@ -107,28 +105,26 @@ impl Emitter<'_> {
         return_ty: &Type,
     ) -> crate::types::go_type::GoType {
         use crate::types::go_type::GoType;
+        let peeled = self.peel_alias(return_ty);
         match shape {
-            AbiShape::BareError => GoType::new("error".to_string()),
+            AbiShape::BareError => self.go_type(&peeled.err_type()),
             AbiShape::ResultTuple | AbiShape::PartialTuple => {
-                let ok_ty = self.peel_alias(return_ty).ok_type();
-                let ok_go = self.go_type(&ok_ty);
-                let mut result = GoType::new(format!("({}, error)", ok_go.code));
+                let ok_go = self.go_type(&peeled.ok_type());
+                let err_go = self.go_type(&peeled.err_type());
+                let mut result = GoType::new(format!("({}, {})", ok_go.code, err_go.code));
                 result.merge_from(&ok_go);
+                result.merge_from(&err_go);
                 result
             }
             AbiShape::CommaOk => {
-                let inner = self.peel_alias(return_ty).ok_type();
-                let inner_go = self.go_type(&inner);
+                let inner_go = self.go_type(&peeled.ok_type());
                 let mut result = GoType::new(format!("({}, bool)", inner_go.code));
                 result.merge_from(&inner_go);
                 result
             }
-            AbiShape::NullableReturn => {
-                let inner = self.peel_alias(return_ty).ok_type();
-                self.go_type(&inner)
-            }
+            AbiShape::NullableReturn => self.go_type(&peeled.ok_type()),
             AbiShape::Tuple { .. } => {
-                let elems = tuple_element_types(&self.peel_alias(return_ty));
+                let elems = tuple_element_types(&peeled);
                 let elem_gos: Vec<GoType> = elems
                     .iter()
                     .map(|t| {
@@ -195,25 +191,35 @@ impl Emitter<'_> {
         return_ann: &Annotation,
     ) -> crate::types::go_type::GoType {
         use crate::types::go_type::GoType;
-        let inner_ann = || match return_ann {
-            Annotation::Constructor { params, .. } => &params[0],
+        let constructor_params = || match return_ann {
+            Annotation::Constructor { params, .. } => params,
             _ => unreachable!("Result/Option/Partial imply Constructor annotation"),
         };
         match shape {
-            AbiShape::BareError => GoType::new("error".to_string()),
+            AbiShape::BareError => {
+                let params = constructor_params();
+                self.go_type_from_annotation(&params[1])
+            }
             AbiShape::ResultTuple | AbiShape::PartialTuple => {
-                let ok_go = self.go_type_from_annotation(inner_ann());
-                let mut result = GoType::new(format!("({}, error)", ok_go.code));
+                let params = constructor_params();
+                let ok_go = self.go_type_from_annotation(&params[0]);
+                let err_go = self.go_type_from_annotation(&params[1]);
+                let mut result = GoType::new(format!("({}, {})", ok_go.code, err_go.code));
                 result.merge_from(&ok_go);
+                result.merge_from(&err_go);
                 result
             }
             AbiShape::CommaOk => {
-                let inner_go = self.go_type_from_annotation(inner_ann());
+                let params = constructor_params();
+                let inner_go = self.go_type_from_annotation(&params[0]);
                 let mut result = GoType::new(format!("({}, bool)", inner_go.code));
                 result.merge_from(&inner_go);
                 result
             }
-            AbiShape::NullableReturn => self.go_type_from_annotation(inner_ann()),
+            AbiShape::NullableReturn => {
+                let params = constructor_params();
+                self.go_type_from_annotation(&params[0])
+            }
             AbiShape::Tuple { .. } => {
                 let elements = match return_ann {
                     Annotation::Tuple { elements, .. } => elements,

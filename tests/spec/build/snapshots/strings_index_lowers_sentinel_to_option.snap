@@ -1,0 +1,24 @@
+---
+source: tests/spec/build/mod.rs
+---
+// === main.go ===
+package main
+
+import (
+	lisette "github.com/ivov/lisette/prelude"
+	"strings"
+)
+
+func find(haystack, needle string) int {
+	ret_2 := strings.Index(haystack, needle)
+	option_3 := lisette.OptionFromCommaOk[int](ret_2, ret_2 != -1)
+	subject_1 := option_3
+	if subject_1.Tag == lisette.OptionSome {
+		return subject_1.SomeVal
+	}
+	return -2
+}
+
+func main() {
+	_ = find("hello", "lo")
+}

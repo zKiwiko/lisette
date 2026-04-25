@@ -439,6 +439,9 @@ impl Emitter<'_> {
             GoCallStrategy::Partial => {
                 self.emit_partial_wrapping(&mut body, &call_str, &return_type)
             }
+            GoCallStrategy::Sentinel { value } => {
+                self.emit_sentinel_wrapping(&mut body, &call_str, &return_type, *value)
+            }
         };
 
         write_line!(body, "return {}", result_var);
@@ -540,8 +543,7 @@ impl Emitter<'_> {
         let opt = self.fresh_var(Some("opt"));
         self.declare(&opt);
 
-        let is_nilable =
-            self.resolve_to_function_type(&inner).is_some() || self.is_nullable_option(return_type);
+        let is_nilable = self.is_nilable_go_type(&inner);
         if is_nilable {
             let go_ret = self.go_type_as_string(&inner);
             let b = format!(

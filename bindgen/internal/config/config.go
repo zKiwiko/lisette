@@ -34,6 +34,10 @@ type TypeOverrides struct {
 	NeverReturn      map[string][]string            `json:"never_return"`
 	PartialResult    map[string][]string            `json:"partial_result"`
 	MutatesParam     map[string]map[string][]string `json:"mutates_param"`
+	// SentinelMinusOne declares int-returning functions that signal
+	// "absent" with `-1`. Bindgen rewrites the return to `Option<int>`
+	// and emits `#[go(sentinel_minus_one)]`.
+	SentinelMinusOne map[string][]string `json:"sentinel_minus_one"`
 }
 
 // LoadConfig loads bindgen configuration from the given path.
@@ -164,6 +168,18 @@ func (c *Config) HasNilableError(pkg, name string) bool {
 		return false
 	}
 	return slices.Contains(names, name)
+}
+
+// SentinelInt returns (value, true) when the given function signals
+// "absent" with a magic int (e.g. -1 for strings.Index).
+func (c *Config) SentinelInt(pkg, name string) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	if names, ok := lookupWithGlob(c.Overrides.Types.SentinelMinusOne, pkg); ok && matchesWildcard(names, name) {
+		return -1, true
+	}
+	return 0, false
 }
 
 // IsNeverReturn returns true if the given function or method in the given

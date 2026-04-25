@@ -27,6 +27,11 @@ type ConvertResult struct {
 	IsTypeAlias      bool // true for Go type aliases (type X = Y)
 	CommaOk          bool // true when return is from (T, bool) comma-ok with nilable T
 	ArrayReturn      bool // true when Go type is [N]T but Lisette type is Slice<T>
+	// SentinelInt is set when this function returns int but the bindgen
+	// config declares a magic value (e.g. -1) for "not found". Bindgen
+	// rewrites the return type to Option<int> and emits the matching
+	// flag-name annotation (e.g. `#[go(sentinel_minus_one)]`).
+	SentinelInt *int
 }
 
 type FunctionParameter struct {

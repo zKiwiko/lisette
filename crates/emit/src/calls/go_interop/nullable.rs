@@ -15,6 +15,45 @@ impl Emitter<'_> {
         self.emit_comma_ok_wrapping(output, &call_str, option_ty)
     }
 
+    pub(super) fn emit_go_sentinel_call_wrapped(
+        &mut self,
+        output: &mut String,
+        call_expression: &Expression,
+        option_ty: &Type,
+        sentinel: i64,
+    ) -> String {
+        let call_str = self.emit_call(output, call_expression, None);
+        self.emit_sentinel_wrapping(output, &call_str, option_ty, sentinel)
+    }
+
+    /// Capture the call's raw return into a temp, then reuse
+    /// `OptionFromCommaOk` with `raw != sentinel` as the bool.
+    pub(crate) fn emit_sentinel_wrapping(
+        &mut self,
+        output: &mut String,
+        call_str: &str,
+        option_ty: &Type,
+        sentinel: i64,
+    ) -> String {
+        self.flags.needs_stdlib = true;
+        let raw = self.fresh_var(Some("ret"));
+        self.declare(&raw);
+        write_line!(output, "{} := {}", raw, call_str);
+        let inner_ty_str = self.go_type_as_string(&option_ty.ok_type());
+        let option_var = self.fresh_var(Some("option"));
+        self.declare(&option_var);
+        write_line!(
+            output,
+            "{} := lisette.OptionFromCommaOk[{}]({}, {} != {})",
+            option_var,
+            inner_ty_str,
+            raw,
+            raw,
+            sentinel
+        );
+        option_var
+    }
+
     pub(crate) fn emit_comma_ok_wrapping(
         &mut self,
         output: &mut String,

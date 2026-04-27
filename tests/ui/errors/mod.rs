@@ -6632,3 +6632,13 @@ fn main() {
 "#;
     assert_parse_error_snapshot!(input);
 }
+
+#[test]
+fn parse_compound_assignment_invalid_target() {
+    let input = r#"
+fn main() {
+  { 1 } -= 2;
+}
+"#;
+    assert_parse_error_snapshot!(input);
+}

@@ -915,12 +915,15 @@ impl<'a> Formatter<'a> {
         if let Expression::DotAccess {
             expression: inner,
             member,
+            span,
             ..
         } = callee
         {
             let (root, mut chain_segments) = collect_method_chain(inner);
+            let member_start = span.byte_offset + span.byte_length - member.len() as u32;
             chain_segments.push(MethodChainSegment {
                 member,
+                member_start,
                 args,
                 spread,
                 type_args,
@@ -928,6 +931,18 @@ impl<'a> Formatter<'a> {
             if chain_segments.len() >= 2 {
                 return self.format_method_chain(root, &chain_segments);
             }
+            // Single-segment chain: probe-format the root to drain any inner-receiver
+            // comments, then check if comments remain before the member. If so, there
+            // are genuine inter-segment comments and we should use chain formatting.
+            let snapshot = self.comments.cursor_snapshot();
+            let root_doc = self.expression(root);
+            let has_inter_segment_comments = self
+                .comments
+                .has_comments_before(chain_segments[0].member_start);
+            if has_inter_segment_comments {
+                return self.format_method_chain_with_root(root_doc, &chain_segments);
+            }
+            self.comments.restore_cursor(snapshot);
         }
 
         let head = self
@@ -1030,14 +1045,30 @@ impl<'a> Formatter<'a> {
         segments: &[MethodChainSegment<'a>],
     ) -> Document<'a> {
         let root_doc = self.expression(root);
+        self.format_method_chain_with_root(root_doc, segments)
+    }
 
+    fn format_method_chain_with_root(
+        &mut self,
+        root_doc: Document<'a>,
+        segments: &[MethodChainSegment<'a>],
+    ) -> Document<'a> {
         let segment_docs: Vec<Document<'a>> = segments
             .iter()
             .map(|seg| {
+                let comments = self.comments.take_comments_before(seg.member_start);
                 let head = Document::str(".")
                     .append(seg.member)
                     .append(Self::format_type_args(seg.type_args));
-                strict_break("", "").append(self.format_call_with_head(head, seg.args, seg.spread))
+                let call_doc = strict_break("", "")
+                    .append(self.format_call_with_head(head, seg.args, seg.spread));
+                match comments {
+                    Some(c) => strict_break("", "")
+                        .append(c)
+                        .force_break()
+                        .append(call_doc),
+                    None => call_doc,
+                }
             })
             .collect();
 
@@ -1902,6 +1933,7 @@ impl<'a> Formatter<'a> {
 
 struct MethodChainSegment<'a> {
     member: &'a str,
+    member_start: u32,
     args: &'a [Expression],
     spread: &'a Option<Expression>,
     type_args: &'a [Annotation],
@@ -1922,13 +1954,16 @@ fn collect_method_chain(expression: &Expression) -> (&Expression, Vec<MethodChai
         let Expression::DotAccess {
             expression: inner,
             member,
+            span,
             ..
         } = expression.as_ref()
         else {
             break;
         };
+        let member_start = span.byte_offset + span.byte_length - member.len() as u32;
         segments.push(MethodChainSegment {
             member,
+            member_start,
             args,
             spread,
             type_args,

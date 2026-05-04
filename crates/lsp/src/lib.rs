@@ -207,7 +207,10 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        let doc = hover::get_hover_doc(expression, offset, file, &snapshot);
+        let doc = hover::get_hover_doc(expression, offset, file, &snapshot).or_else(|| {
+            let type_id = ty.get_qualified_id()?;
+            snapshot.definitions().get(type_id)?.doc().cloned()
+        });
 
         let content = match doc {
             Some(doc) => format!("```lisette\n{ty}\n```\n\n---\n\n{doc}"),

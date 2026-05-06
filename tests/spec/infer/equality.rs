@@ -702,6 +702,62 @@ fn cast_rune_to_int() {
 }
 
 #[test]
+fn cast_rune_to_string() {
+    infer(
+        r#"
+    fn main() {
+      let r: rune = 'A';
+      let s: string = r as string;
+    }
+        "#,
+    )
+    .assert_no_errors();
+}
+
+#[test]
+fn cast_byte_to_rune() {
+    infer(
+        r#"
+    fn main() {
+      let b: byte = 65;
+      let r: rune = b as rune;
+    }
+        "#,
+    )
+    .assert_no_errors();
+}
+
+#[test]
+fn cast_custom_rune_type_to_string() {
+    infer(
+        r#"
+    type MyRune = rune
+
+    fn main() {
+      let r: MyRune = 'A';
+      let s: string = r as string;
+    }
+        "#,
+    )
+    .assert_no_errors();
+}
+
+#[test]
+fn cast_custom_byte_type_to_rune() {
+    infer(
+        r#"
+    type MyByte = byte
+
+    fn main() {
+      let b: MyByte = 65;
+      let r: rune = b as rune;
+    }
+        "#,
+    )
+    .assert_no_errors();
+}
+
+#[test]
 fn cast_invalid_string_to_int() {
     infer(
         r#"

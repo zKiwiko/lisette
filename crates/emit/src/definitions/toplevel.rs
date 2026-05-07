@@ -69,7 +69,11 @@ impl Emitter<'_> {
         expression: &Expression,
         ty: &Type,
     ) -> String {
-        let initial_go_name = self.scope.bindings.add(identifier, identifier);
+        let target_name = match self.module.escape_remap.get(identifier) {
+            Some(remapped) => remapped.clone(),
+            None => identifier.to_string(),
+        };
+        let initial_go_name = self.scope.bindings.add(identifier, target_name);
         let go_identifier = if self.try_declare(&initial_go_name) {
             initial_go_name
         } else {

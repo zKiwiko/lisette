@@ -18,8 +18,7 @@ build-debug:
     cargo build
 
 test:
-    cargo test -p tests --test suite
-    cargo test -p tests --test lsp
+    cargo test -p tests --test suite --test lsp
 
 test-infer:
     cargo test -p tests --test suite infer_tests
@@ -95,7 +94,12 @@ _stdlib-typedef-version:
     @grep '// Lisette:' crates/stdlib/typedefs/fmt.d.lis | awk '{print $3}'
 
 check-stdlib-drift:
-    just generate-stdlib-typedefs "$(just _stdlib-typedef-version)"
+    cd bindgen && just build
+    cargo build --profile bindgen
+    ./target/bindgen/lis check crates/stdlib/typedefs/
+    BINDGEN_TARGETS={{_supported-targets}} ./target/bindgen/lis bindgen stdlib "$(just _stdlib-typedef-version)"
+    ./target/bindgen/lis format crates/stdlib/typedefs/
+    just format
     git diff --exit-code crates/stdlib/
 
 # Build the playground and write output to docs/play/ (served at lisette.run/play)

@@ -120,6 +120,42 @@ let x = r.*
       value: (identifier))))
 
 ================================================================================
+Bitwise operators
+================================================================================
+
+let x = (a | b) ^ c &^ d
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_declaration
+    pattern: (identifier)
+    value: (binary_expression
+      left: (binary_expression
+        left: (binary_expression
+          left: (identifier)
+          right: (identifier))
+        right: (identifier))
+      right: (identifier))))
+
+================================================================================
+Shift operators
+================================================================================
+
+let x = a << 2 >> 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_declaration
+    pattern: (identifier)
+    value: (binary_expression
+      left: (binary_expression
+        left: (identifier)
+        right: (integer_literal))
+      right: (integer_literal))))
+
+================================================================================
 Field access
 ================================================================================
 

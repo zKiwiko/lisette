@@ -7,4 +7,3 @@ bindgen/tests/coverage*
 editors/vscode/node_modules/
 editors/vscode/dist/
 editors/vscode/*.vsix
-scripts/lisette/

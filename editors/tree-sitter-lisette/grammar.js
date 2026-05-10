@@ -531,11 +531,11 @@ module.exports = grammar({
     binary_expression: $ => {
       const table = [
         [PREC.pipeline, '|>'],
-        [PREC.and, '&&'],
         [PREC.or, '||'],
+        [PREC.and, '&&'],
         [PREC.comparative, choice('==', '!=', '<=', '>=')],
-        [PREC.additive, choice('+', '-')],
-        [PREC.multiplicative, choice('*', '/', '%')],
+        [PREC.additive, choice('+', '-', '|', '^')],
+        [PREC.multiplicative, choice('*', '/', '%', '<<', '>>', '&', '&^')],
       ];
 
       return choice(

@@ -42,26 +42,15 @@ impl Emitter<'_> {
             .map(|f| f.ty.clone())
     }
 
-    pub(crate) fn is_go_function_alias(&self, ty: &Type) -> bool {
-        let Type::Nominal { id, .. } = ty else {
+    pub(crate) fn is_function_alias(&self, ty: &Type) -> bool {
+        let Type::Nominal { .. } = ty else {
             return false;
         };
-        if !id.starts_with(GO_IMPORT_PREFIX) {
-            return false;
-        }
         self.resolve_to_function_type(ty).is_some()
     }
 
     pub(crate) fn resolve_to_function_type(&self, ty: &Type) -> Option<Type> {
-        fn as_function(ty: &Type) -> Option<Type> {
-            if matches!(ty, Type::Function { .. }) {
-                return Some(ty.clone());
-            }
-            ty.get_underlying()
-                .filter(|u| matches!(u, Type::Function { .. }))
-                .cloned()
-        }
-        as_function(ty).or_else(|| as_function(&self.peel_alias(ty)))
+        crate::resolve_to_function_type(self.ctx.definitions, ty)
     }
 
     /// Collect own + transitively inherited methods, tagged with the id

@@ -11,10 +11,13 @@ use syntax::program::{CallKind, Definition, DefinitionBody};
 use syntax::types::{SimpleKind, SubstitutionMap, Symbol, Type, substitute, unqualified_name};
 
 impl Emitter<'_> {
-    /// True when Go's untyped-literal default (`int`/`float64`/`complex128`)
-    /// would mismatch this type, requiring explicit type args at the call site.
-    /// Walks alias chains via the definition map so multi-hop aliases resolve.
+    /// True when Go's inference would lose this alias: function aliases (infer
+    /// as `func(...)`) and non-default numeric aliases (untyped literals default
+    /// to `int`/`float64`/`complex128`).
     pub(crate) fn needs_explicit_args_for_go_inference(&self, ty: &Type) -> bool {
+        if self.is_function_alias(ty) {
+            return true;
+        }
         let mut current = ty.clone();
         let mut seen: HashSet<Symbol> = HashSet::default();
         while let Type::Nominal { id, params, .. } = &current {
@@ -373,11 +376,11 @@ impl Emitter<'_> {
                 let variant = unqualified_name(value);
                 let enum_name = unqualified_name(&enum_id);
                 let qualified = format!("{}.{}", enum_name, variant);
-                if self.module.make_functions.contains_key(&qualified) {
+                if self.globals.make_function_names.contains_key(&qualified) {
                     return Some((enum_id, variant.to_string()));
                 }
                 if let Type::Function { params, .. } = ty.unwrap_forall() {
-                    for key in self.module.make_functions.keys() {
+                    for key in self.globals.make_function_names.keys() {
                         if let Some((e_name, v_name)) = key.split_once('.')
                             && e_name == enum_name
                             && let Some(layout) = self.module.enum_layouts.get(&enum_id)
@@ -401,7 +404,7 @@ impl Emitter<'_> {
                 } = expression.as_ref()
                 {
                     let qualified = format!("{}.{}", enum_name, member);
-                    if self.module.make_functions.contains_key(&qualified) {
+                    if self.globals.make_function_names.contains_key(&qualified) {
                         let enum_id = enum_id_from_type(ty)?;
                         return Some((enum_id, member.to_string()));
                     }
@@ -411,7 +414,7 @@ impl Emitter<'_> {
                 } = expression.as_ref()
                 {
                     let qualified = format!("{}.{}", type_name, member);
-                    if self.module.make_functions.contains_key(&qualified) {
+                    if self.globals.make_function_names.contains_key(&qualified) {
                         let enum_id = enum_id_from_type(ty)?;
                         return Some((enum_id, member.to_string()));
                     }
@@ -545,7 +548,7 @@ impl Emitter<'_> {
         }
         params
             .iter()
-            .any(|p| self.as_interface(p).is_some() || self.is_go_function_alias(p))
+            .any(|p| self.as_interface(p).is_some() || self.is_function_alias(p))
             .then(|| self.format_type_args(params))
     }
 

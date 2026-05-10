@@ -1866,6 +1866,11 @@ fn operator_verb(operator: &BinaryOperator) -> &'static str {
         BinaryOperator::Multiplication => "multiply",
         BinaryOperator::Division => "divide",
         BinaryOperator::Remainder => "get remainder of",
+        BinaryOperator::BitwiseAnd
+        | BinaryOperator::BitwiseOr
+        | BinaryOperator::BitwiseXor
+        | BinaryOperator::BitwiseAndNot => "apply bitwise operator to",
+        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => "shift",
         BinaryOperator::Equal | BinaryOperator::NotEqual => "compare",
         BinaryOperator::LessThan
         | BinaryOperator::LessThanOrEqual
@@ -1882,7 +1887,13 @@ fn operator_help(op: &BinaryOperator) -> &'static str {
         BinaryOperator::Subtraction
         | BinaryOperator::Multiplication
         | BinaryOperator::Division
-        | BinaryOperator::Remainder => "requires both operands to have the same numeric type",
+        | BinaryOperator::Remainder
+        | BinaryOperator::BitwiseAnd
+        | BinaryOperator::BitwiseOr
+        | BinaryOperator::BitwiseXor
+        | BinaryOperator::BitwiseAndNot
+        | BinaryOperator::ShiftLeft
+        | BinaryOperator::ShiftRight => "requires both operands to have the same numeric type",
         BinaryOperator::Equal | BinaryOperator::NotEqual => {
             "requires both operands to have the same type"
         }

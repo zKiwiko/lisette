@@ -93,24 +93,6 @@ impl<'source> Parser<'source> {
                 continue;
             }
 
-            if matches!(self.current_token().kind, Ampersand | Pipe | Caret)
-                && !self.newline_before_current()
-            {
-                let op_token = self.current_token();
-                let span = self.span_from_token(op_token);
-                let error = ParseError::new(
-                    "Unsupported operator",
-                    span,
-                    format!("`{}` is not a supported binary operator", op_token.text),
-                )
-                .with_help("Lisette does not support bitwise operators")
-                .with_parse_code("unsupported_operator");
-                self.errors.push(error);
-                self.next();
-                let _rhs = self.pratt_parse(min_prec);
-                continue;
-            }
-
             break;
         }
 
@@ -139,8 +121,8 @@ impl<'source> Parser<'source> {
             AmpersandDouble => Some(4),
             EqualDouble | NotEqual | LeftAngleBracket | RightAngleBracket | LessThanOrEqual
             | GreaterThanOrEqual => Some(5),
-            Plus | Minus => Some(7),
-            Star | Slash | Percent => Some(8),
+            Plus | Minus | Pipe | Caret => Some(7),
+            Star | Slash | Percent | ShiftLeft | ShiftRight | Ampersand | AndNot => Some(8),
             _ => None,
         }
     }

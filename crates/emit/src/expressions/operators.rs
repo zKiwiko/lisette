@@ -177,6 +177,12 @@ impl Emitter<'_> {
                 | Multiplication
                 | Division
                 | Remainder
+                | BitwiseAnd
+                | BitwiseOr
+                | BitwiseXor
+                | BitwiseAndNot
+                | ShiftLeft
+                | ShiftRight
                 | LessThan
                 | LessThanOrEqual
                 | GreaterThan

@@ -536,6 +536,35 @@ impl TaskState<'_> {
                 }
             }
 
+            BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseAndNot | ShiftLeft | ShiftRight => {
+                let left_resolved = left_operand_ty.resolve_in(&self.env);
+                let right_resolved = right_operand_ty.resolve_in(&self.env);
+
+                if let Some(result_ty) = self.try_operation_with_numeric_alias(
+                    operator,
+                    &left_resolved,
+                    &right_resolved,
+                    &span,
+                ) {
+                    result_ty
+                } else {
+                    let left_ok =
+                        self.ensure_integer_for_binary(operator, left_operand_ty, left_span);
+                    let right_ok =
+                        self.ensure_integer_for_binary(operator, right_operand_ty, right_span);
+                    if left_ok && right_ok {
+                        self.unify_binary_operands(
+                            store,
+                            operator,
+                            left_operand_ty,
+                            right_operand_ty,
+                            &span,
+                        );
+                    }
+                    left_operand_ty.clone()
+                }
+            }
+
             Pipeline => {
                 panic!("Pipeline operator should have been desugared before type inference")
             }
@@ -562,6 +591,27 @@ impl TaskState<'_> {
             return false;
         }
         if !resolved_ty.is_numeric() {
+            self.sink.push(diagnostics::infer::not_numeric_for_binary(
+                operator,
+                &resolved_ty,
+                *span,
+            ));
+            return false;
+        }
+        true
+    }
+
+    fn ensure_integer_for_binary(
+        &mut self,
+        operator: &BinaryOperator,
+        ty: &Type,
+        span: &Span,
+    ) -> bool {
+        let resolved_ty = self.env.resolve(ty);
+        if matches!(resolved_ty, Type::Var { .. } | Type::Error) {
+            return true;
+        }
+        if !is_integer_type(&resolved_ty, &self.env) {
             self.sink.push(diagnostics::infer::not_numeric_for_binary(
                 operator,
                 &resolved_ty,

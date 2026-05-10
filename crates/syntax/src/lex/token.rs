@@ -67,6 +67,9 @@ pub enum TokenKind {
     DotDotEqual,
     Ellipsis,
     Backtick,
+    ShiftLeft,  // <<
+    ShiftRight, // >>
+    AndNot,     // &^ - Short hand for `x & (^y)` in Go
     Function,
     Let,
     If,
@@ -162,6 +165,9 @@ impl fmt::Display for TokenKind {
             DotDotEqual => "`..=`",
             Ellipsis => "`...`",
             Backtick => "`` ` ``",
+            ShiftLeft => "`<<`",
+            ShiftRight => "`>>`",
+            AndNot => "`&^`",
             Function => "`fn`",
             Let => "`let`",
             If => "`if`",
@@ -298,6 +304,9 @@ impl TokenKind {
             ('*', '=') => Some(StarEqual),
             ('/', '=') => Some(SlashEqual),
             ('%', '=') => Some(PercentEqual),
+            ('&', '^') => Some(AndNot),
+            ('<', '<') => Some(ShiftLeft),
+            ('>', '>') => Some(ShiftRight),
             _ => None,
         }
     }

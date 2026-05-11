@@ -128,6 +128,12 @@ impl<'source> Lexer<'source> {
                 | TokenKind::Star
                 | TokenKind::Slash
                 | TokenKind::Percent
+                | TokenKind::Ampersand
+                | TokenKind::Pipe
+                | TokenKind::Caret
+                | TokenKind::AndNot
+                | TokenKind::ShiftLeft
+                | TokenKind::ShiftRight
                 | TokenKind::Pipeline
                 | TokenKind::AmpersandDouble
                 | TokenKind::PipeDouble
@@ -143,6 +149,12 @@ impl<'source> Lexer<'source> {
                 | TokenKind::MinusEqual
                 | TokenKind::StarEqual
                 | TokenKind::SlashEqual
+                | TokenKind::AmpersandEqual
+                | TokenKind::PipeEqual
+                | TokenKind::CaretEqual
+                | TokenKind::AndNotEqual
+                | TokenKind::ShiftLeftEqual
+                | TokenKind::ShiftRightEqual
                 | TokenKind::Else
                 | TokenKind::LeftCurlyBrace
                 | TokenKind::RightCurlyBrace

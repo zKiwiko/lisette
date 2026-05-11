@@ -1739,6 +1739,7 @@ pub enum FormatStringPart {
 pub enum UnaryOperator {
     Negative,
     Not,
+    BitwiseNot,
     Deref,
 }
 

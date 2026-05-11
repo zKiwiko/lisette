@@ -56,6 +56,12 @@ pub enum TokenKind {
     StarEqual,
     SlashEqual,
     PercentEqual,
+    AmpersandEqual,
+    PipeEqual,
+    CaretEqual,
+    ShiftLeftEqual,  // <<=
+    ShiftRightEqual, // >>=
+    AndNotEqual,     // &^=
     Caret,
     Percent,
     Bang,
@@ -154,6 +160,12 @@ impl fmt::Display for TokenKind {
             StarEqual => "`*=`",
             SlashEqual => "`/=`",
             PercentEqual => "`%=`",
+            AmpersandEqual => "`&=`",
+            PipeEqual => "`|=`",
+            CaretEqual => "`^=`",
+            ShiftLeftEqual => "`<<=`",
+            ShiftRightEqual => "`>>=`",
+            AndNotEqual => "`&^=`",
             Caret => "`^`",
             Percent => "`%`",
             Bang => "`!`",
@@ -281,6 +293,9 @@ impl TokenKind {
         match (c1, c2, c3) {
             ('.', '.', '=') => Some(TokenKind::DotDotEqual),
             ('.', '.', '.') => Some(TokenKind::Ellipsis),
+            ('<', '<', '=') => Some(TokenKind::ShiftLeftEqual),
+            ('>', '>', '=') => Some(TokenKind::ShiftRightEqual),
+            ('&', '^', '=') => Some(TokenKind::AndNotEqual),
             _ => None,
         }
     }
@@ -304,6 +319,9 @@ impl TokenKind {
             ('*', '=') => Some(StarEqual),
             ('/', '=') => Some(SlashEqual),
             ('%', '=') => Some(PercentEqual),
+            ('&', '=') => Some(AmpersandEqual),
+            ('|', '=') => Some(PipeEqual),
+            ('^', '=') => Some(CaretEqual),
             ('&', '^') => Some(AndNot),
             ('<', '<') => Some(ShiftLeft),
             ('>', '>') => Some(ShiftRight),

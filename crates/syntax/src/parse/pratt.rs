@@ -104,7 +104,7 @@ impl<'source> Parser<'source> {
 
     fn prefix_operator_precedence(&self, kind: TokenKind) -> u8 {
         match kind {
-            Minus | Bang | Ampersand => 15,
+            Minus | Bang | Caret | Ampersand => 15,
             _ => {
                 debug_assert!(false, "unexpected prefix operator: {:?}", kind);
                 15
@@ -156,13 +156,14 @@ impl<'source> Parser<'source> {
         let start = self.current_token();
 
         match start.kind {
-            Bang | Minus => {
+            Bang | Minus | Caret => {
                 self.next();
 
-                let operator = if start.kind == Bang {
-                    ast::UnaryOperator::Not
-                } else {
-                    ast::UnaryOperator::Negative
+                let operator = match start.kind {
+                    Bang => ast::UnaryOperator::Not,
+                    Minus => ast::UnaryOperator::Negative,
+                    Caret => ast::UnaryOperator::BitwiseNot,
+                    _ => unreachable!("guarded by match arm"),
                 };
 
                 let prec = self.prefix_operator_precedence(start.kind);

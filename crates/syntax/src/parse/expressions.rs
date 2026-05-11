@@ -1045,6 +1045,12 @@ impl<'source> Parser<'source> {
             StarEqual => Some(BinaryOperator::Multiplication),
             SlashEqual => Some(BinaryOperator::Division),
             PercentEqual => Some(BinaryOperator::Remainder),
+            AmpersandEqual => Some(BinaryOperator::BitwiseAnd),
+            PipeEqual => Some(BinaryOperator::BitwiseOr),
+            CaretEqual => Some(BinaryOperator::BitwiseXor),
+            AndNotEqual => Some(BinaryOperator::BitwiseAndNot),
+            ShiftLeftEqual => Some(BinaryOperator::ShiftLeft),
+            ShiftRightEqual => Some(BinaryOperator::ShiftRight),
             _ => None,
         };
 
@@ -1529,6 +1535,12 @@ impl<'source> Parser<'source> {
                     | StarEqual
                     | SlashEqual
                     | PercentEqual
+                    | AmpersandEqual
+                    | PipeEqual
+                    | CaretEqual
+                    | AndNotEqual
+                    | ShiftLeftEqual
+                    | ShiftRightEqual
                     | DotDot
                     | DotDotEqual
                     | As

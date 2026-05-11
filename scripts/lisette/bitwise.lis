@@ -22,18 +22,42 @@ fn main() {
   if check("shr basic", 32 >> 3, 4) { passed += 1 } else { failed += 1 }
 
   if check("xor identity 0", 0 ^ 123, 123) { passed += 1 } else { failed += 1 }
-  if check("and identity all-ones style", 255 & 42, 42) { passed += 1 } else { failed += 1 }
+  if check("and identity all-ones style", 255 & 42, 42) {
+    passed += 1
+  } else {
+    failed += 1
+  }
   if check("or identity 0", 0 | 77, 77) { passed += 1 } else { failed += 1 }
-  if check("andnot clear low bits", 0b1111 &^ 0b0011, 12) { passed += 1 } else { failed += 1 }
+  if check("andnot clear low bits", 0b1111 &^ 0b0011, 12) {
+    passed += 1
+  } else {
+    failed += 1
+  }
 
   if check("left assoc xor", 1 ^ 2 ^ 3, 0) { passed += 1 } else { failed += 1 }
   if check("left assoc and", 7 & 3 & 1, 1) { passed += 1 } else { failed += 1 }
   if check("left assoc or", 1 | 2 | 4, 7) { passed += 1 } else { failed += 1 }
 
-  if check("precedence mul over xor", 2 ^ 3 * 4, 14) { passed += 1 } else { failed += 1 }
-  if check("precedence shift over plus lhs", 1 + 2 << 3, 17) { passed += 1 } else { failed += 1 }
-  if check("precedence shift over plus rhs", 32 >> 3 + 1, 5) { passed += 1 } else { failed += 1 }
-  if check("paren override", (1 + 2) << (3 + 1), 48) { passed += 1 } else { failed += 1 }
+  if check("precedence mul over xor", 2 ^ 3 * 4, 14) {
+    passed += 1
+  } else {
+    failed += 1
+  }
+  if check("precedence shift over plus lhs", 1 + 2 << 3, 17) {
+    passed += 1
+  } else {
+    failed += 1
+  }
+  if check("precedence shift over plus rhs", 32 >> 3 + 1, 5) {
+    passed += 1
+  } else {
+    failed += 1
+  }
+  if check("paren override", (1 + 2) << (3 + 1), 48) {
+    passed += 1
+  } else {
+    failed += 1
+  }
 
   if check("mix and/or/xor", (0b1010 & 0b1111) ^ (0b0011 | 0b0100), 13) {
     passed += 1
@@ -52,6 +76,34 @@ fn main() {
   } else {
     failed += 1
   }
+
+  if check("bitwise not positive", ^10, -11) { passed += 1 } else { failed += 1 }
+  if check("bitwise not zero", ^0, -1) { passed += 1 } else { failed += 1 }
+  if check("bitwise not negative", ^(-1), 0) { passed += 1 } else { failed += 1 }
+
+  let mut v_and = 12
+  v_and &= 10
+  if check("compound &=", v_and, 8) { passed += 1 } else { failed += 1 }
+
+  let mut v_or = 12
+  v_or |= 3
+  if check("compound |=", v_or, 15) { passed += 1 } else { failed += 1 }
+
+  let mut v_xor = 12
+  v_xor ^= 10
+  if check("compound ^=", v_xor, 6) { passed += 1 } else { failed += 1 }
+
+  let mut v_andnot = 15
+  v_andnot &^= 3
+  if check("compound &^=", v_andnot, 12) { passed += 1 } else { failed += 1 }
+
+  let mut v_shl = 3
+  v_shl <<= 4
+  if check("compound <<=", v_shl, 48) { passed += 1 } else { failed += 1 }
+
+  let mut v_shr = 64
+  v_shr >>= 3
+  if check("compound >>=", v_shr, 8) { passed += 1 } else { failed += 1 }
 
   fmt.Println("-----")
   fmt.Println("bitwise tests passed:", passed, "failed:", failed)
@@ -78,5 +130,14 @@ fn main() {
 // PASS mix and/or/xor got 13
 // PASS compound expression 1 got 80
 // PASS compound expression 2 got 12
+// PASS bitwise not positive got -11
+// PASS bitwise not zero got -1
+// PASS bitwise not negative got 0
+// PASS compound &= got 8
+// PASS compound |= got 15
+// PASS compound ^= got 6
+// PASS compound &^= got 12
+// PASS compound <<= got 48
+// PASS compound >>= got 8
 // -----
-// bitwise tests passed: 20 failed: 0
+// bitwise tests passed: 29 failed: 0

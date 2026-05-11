@@ -152,6 +152,7 @@ impl Emitter<'_> {
         let op_str = match operator {
             UnaryOperator::Negative => "-",
             UnaryOperator::Not => "!",
+            UnaryOperator::BitwiseNot => "^",
             UnaryOperator::Deref => "*",
         };
         format!("{}{}", op_str, expression)

@@ -582,6 +582,7 @@ impl<'a> Formatter<'a> {
         match operator {
             UnaryOperator::Negative => Document::str("-").append(self.expression(expression)),
             UnaryOperator::Not => Document::str("!").append(self.expression(expression)),
+            UnaryOperator::BitwiseNot => Document::str("^").append(self.expression(expression)),
             UnaryOperator::Deref => self.expression(expression).append(".*"),
         }
     }

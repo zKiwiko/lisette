@@ -144,6 +144,19 @@ impl TaskState<'_> {
                 self.unify(store, &bool_ty, &operand_expected_ty, &span);
                 bool_ty
             }
+            BitwiseNot => {
+                let resolved = operand_expected_ty.resolve_in(&self.env);
+                if resolved.is_error()
+                    || matches!(resolved, Type::Var { .. })
+                    || is_integer_type(&resolved, &self.env)
+                {
+                    operand_expected_ty.clone()
+                } else {
+                    self.sink
+                        .push(diagnostics::infer::not_numeric(&resolved, operand_span));
+                    operand_expected_ty.clone()
+                }
+            }
             Deref => {
                 let inner_ty = self.new_type_var();
                 let ref_ty = self.type_reference(inner_ty.clone());
